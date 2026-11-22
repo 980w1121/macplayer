@@ -109,14 +109,55 @@ done
 # Xcode applies as "Embed Swift Standard Libraries" — is to ship the
 # toolchain's Swift runtime dylibs inside the app and point every
 # reference at @rpath instead of /usr/lib/swift/.
-SWIFT_LIB_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/../lib/swift/macosx" && pwd)"
+# Xcode 26.6 moved libswift_Concurrency.dylib out of usr/lib/swift/macosx
+# (run #15 failed here: "Swift runtime libswift_Concurrency.dylib not
+# found in .../usr/lib/swift/macosx"). Swift 6.2 still builds it as a
+# separate dylib, so look for each runtime lib in the current-runtime dir
+# first, then the back-deployment dir (where Xcode's swift-stdlib-tool
+# embeds from for old deployment targets), then anywhere under the
+# toolchain's usr/lib (macOS copies only), then the runner's system
+# runtime as a last resort.
+TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/.." && pwd)"
+SWIFT_LIB_DIR="$TOOLCHAIN_DIR/usr/lib/swift/macosx"
+SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/usr/lib/swift-5.0/macosx"
+find_swift_lib() {
+    name="$1"
+    for dir in "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
+        if [ -f "$dir/$name" ]; then
+            echo "$dir/$name"
+            return 0
+        fi
+    done
+    found="$(find "$TOOLCHAIN_DIR/usr/lib/swift" "$TOOLCHAIN_DIR/usr/lib/swift-5.0" -path '*macosx*' -name "$name" -print -quit 2>/dev/null)"
+    if [ -n "$found" ]; then
+        echo "$found"
+        return 0
+    fi
+    if [ -f "/usr/lib/swift/$name" ]; then
+        echo "/usr/lib/swift/$name"
+        return 0
+    fi
+    return 1
+}
 copy_swift_lib() {
     name="$1"
     if [ ! -f "$APP/Contents/Frameworks/$name" ]; then
-        [ -f "$SWIFT_LIB_DIR/$name" ] || { echo "error: Swift runtime $name not found in $SWIFT_LIB_DIR" >&2; exit 1; }
-        cp -f "$SWIFT_LIB_DIR/$name" "$APP/Contents/Frameworks/$name"
+        src="$(find_swift_lib "$name")" || { echo "error: Swift runtime $name not found in $SWIFT_LIB_DIR, $SWIFT_LIB_DIR_BACKDEPLOY, or the toolchain" >&2; exit 1; }
+        echo "bundling Swift runtime $name from $src"
+        cp -f "$src" "$APP/Contents/Frameworks/$name"
         chmod +w "$APP/Contents/Frameworks/$name"
         install_name_tool -id "@rpath/$name" "$APP/Contents/Frameworks/$name"
+        # A system-sourced runtime lib is built for the runner's macOS;
+        # refuse it if it demands a newer macOS than our 13.0 target,
+        # or the app would die at launch on the user's Mac.
+        if [ "$src" = "/usr/lib/swift/$name" ]; then
+            minos="$(otool -l "$APP/Contents/Frameworks/$name" | awk '/LC_BUILD_VERSION/{p=1} p&&/minos/{print $2; exit} /LC_VERSION_MIN_MACOSX/{q=1} q&&/version/{print $2; exit}')"
+            major="${minos%%.*}"
+            case "$major" in
+                ''|*[!0-9]*) : ;;
+                *) if [ "$major" -gt 13 ]; then echo "error: system Swift runtime $name requires macOS $minos (> 13.0)" >&2; exit 1; fi ;;
+            esac
+        fi
     fi
 }
 # Repeat to a fixpoint: a newly copied Swift dylib may itself link
