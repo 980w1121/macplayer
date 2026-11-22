@@ -115,11 +115,16 @@ done
 # separate dylib, so look for each runtime lib in the current-runtime dir
 # first, then the back-deployment dir (where Xcode's swift-stdlib-tool
 # embeds from for old deployment targets), then anywhere under the
-# toolchain's usr/lib (macOS copies only), then the runner's system
-# runtime as a last resort.
+# toolchain (macOS copies only), then the runner's system runtime
+# as a last resort.
+# NOTE (run #16): `xcrun --find swiftc` is
+# .../XcodeDefault.xctoolchain/usr/bin/swiftc, so dirname/.. is the
+# toolchain's usr/ dir, NOT the toolchain root — the previous fix
+# appended another /usr (.../usr/usr/lib/swift/macosx), a path that
+# does not exist, so the search never looked in the real dirs.
 TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/.." && pwd)"
-SWIFT_LIB_DIR="$TOOLCHAIN_DIR/usr/lib/swift/macosx"
-SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/usr/lib/swift-5.0/macosx"
+SWIFT_LIB_DIR="$TOOLCHAIN_DIR/lib/swift/macosx"
+SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/lib/swift-5.0/macosx"
 find_swift_lib() {
     name="$1"
     for dir in "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
@@ -128,7 +133,7 @@ find_swift_lib() {
             return 0
         fi
     done
-    found="$(find "$TOOLCHAIN_DIR/usr/lib/swift" "$TOOLCHAIN_DIR/usr/lib/swift-5.0" -path '*macosx*' -name "$name" -print -quit 2>/dev/null)"
+    found="$(find "$TOOLCHAIN_DIR" -path '*macosx*' -name "$name" -print -quit 2>/dev/null)"
     if [ -n "$found" ]; then
         echo "$found"
         return 0
