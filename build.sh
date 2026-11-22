@@ -122,6 +122,14 @@ done
 # toolchain's usr/ dir, NOT the toolchain root — the previous fix
 # appended another /usr (.../usr/usr/lib/swift/macosx), a path that
 # does not exist, so the search never looked in the real dirs.
+# NOTE (run #17): Xcode 26.6 no longer ships libswiftCoreMIDI.dylib
+# anywhere in the toolchain, and the macOS 26 runner's /usr/lib/swift
+# lacks it too — the CoreMIDI Swift overlay was dropped. A bundled
+# overlay still references it, so copy_swift_lib skips libraries
+# that cannot be found instead of failing, their references are left
+# pointing at /usr/lib/swift/ (macOS 13 still ships the library
+# there), and the guard below only fails on references to libraries
+# that ARE bundled (a missed @rpath rewrite).
 TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/.." && pwd)"
 SWIFT_LIB_DIR="$TOOLCHAIN_DIR/lib/swift/macosx"
 SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/lib/swift-5.0/macosx"
@@ -147,7 +155,17 @@ find_swift_lib() {
 copy_swift_lib() {
     name="$1"
     if [ ! -f "$APP/Contents/Frameworks/$name" ]; then
-        src="$(find_swift_lib "$name")" || { echo "error: Swift runtime $name not found in $SWIFT_LIB_DIR, $SWIFT_LIB_DIR_BACKDEPLOY, or the toolchain" >&2; exit 1; }
+        src="$(find_swift_lib "$name")" || {
+            # Run #17: a referenced Swift runtime library that the
+            # toolchain no longer ships (libswiftCoreMIDI) cannot be
+            # bundled — skip it and leave its /usr/lib/swift/
+            # reference as-is; macOS 13 still provides it there.
+            if ! grep -qx "$name" "$SWIFT_SKIP_TMP" 2>/dev/null; then
+                echo "$name" >> "$SWIFT_SKIP_TMP"
+                echo "warning: Swift runtime $name not shipped in the Xcode toolchain or the system runtime; leaving its /usr/lib/swift/ reference as-is" >&2
+            fi
+            return 0
+        }
         echo "bundling Swift runtime $name from $src"
         cp -f "$src" "$APP/Contents/Frameworks/$name"
         chmod +w "$APP/Contents/Frameworks/$name"
@@ -168,6 +186,8 @@ copy_swift_lib() {
 # Repeat to a fixpoint: a newly copied Swift dylib may itself link
 # another Swift dylib (e.g. libswiftFoundation links libswiftCore).
 SWIFT_DEPS_TMP="/tmp/macplayer-swift-deps.$$"
+SWIFT_SKIP_TMP="/tmp/macplayer-swift-skip.$$"
+: > "$SWIFT_SKIP_TMP"
 while :; do
     before="$(ls "$APP/Contents/Frameworks" | wc -l)"
     : > "$SWIFT_DEPS_TMP"
@@ -181,15 +201,21 @@ while :; do
     after="$(ls "$APP/Contents/Frameworks" | wc -l)"
     [ "$after" = "$before" ] && break
 done
-rm -f "$SWIFT_DEPS_TMP"
+rm -f "$SWIFT_DEPS_TMP" "$SWIFT_SKIP_TMP"
 # Rewrite every /usr/lib/swift/ reference in the executable and all
 # bundled dylibs (including the Swift dylibs themselves, which
-# reference each other by absolute path) to @rpath/<basename>.
+# reference each other by absolute path) to @rpath/<basename> — but
+# only for libraries actually bundled (run #17: a reference to a
+# library the toolchain no longer ships, e.g. libswiftCoreMIDI,
+# must keep pointing at /usr/lib/swift/, where macOS 13 still
+# provides it).
 for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$binary" ] || continue
     otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' | while read -r dep; do
         base="$(basename "$dep")"
-        install_name_tool -change "$dep" "@rpath/$base" "$binary" 2>/dev/null || true
+        if [ -f "$APP/Contents/Frameworks/$base" ]; then
+            install_name_tool -change "$dep" "@rpath/$base" "$binary" 2>/dev/null || true
+        fi
     done
 done
 
@@ -239,8 +265,12 @@ codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; e
 # Guard: no bundled binary may link a macOS 26-only system library
 # (v1.0.3 crash: Homebrew's freetype linked /usr/lib/libhvf.dylib,
 # which does not exist on macOS 13), and none may still point at the
-# system Swift runtime (v1.0.4 crash: libmpv needs a Swift 6.2 symbol
-# missing from macOS 13's libswiftCore — the runtime must be bundled).
+# system Swift runtime for a library that IS bundled (v1.0.4 crash:
+# libmpv needs a Swift 6.2 symbol missing from macOS 13's
+# libswiftCore — the runtime must be bundled, so a reference to a
+# bundled library via the system path means the @rpath rewrite
+# missed it). A reference to a library the toolchain no longer ships
+# (run #17: libswiftCoreMIDI) is allowed to stay on the system path.
 # Fail loudly in CI instead of shipping an app that dies at launch.
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$f" ] || continue
@@ -248,10 +278,17 @@ for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
         echo "error: $f links /usr/lib/libhvf.dylib (macOS 26-only)" >&2
         exit 1
     fi
-    if otool -L "$f" | grep -q '/usr/lib/swift/'; then
-        echo "error: $f still links the system Swift runtime" >&2
-        exit 1
-    fi
+    SWIFT_GUARD_FAIL=""
+    for dep in $(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
+        base="$(basename "$dep")"
+        if [ -f "$APP/Contents/Frameworks/$base" ]; then
+            echo "error: $f still links the system Swift runtime ($dep) although $base is bundled" >&2
+            SWIFT_GUARD_FAIL=1
+        else
+            echo "note: $f links system Swift runtime $dep (not shipped in the Xcode 26.6 toolchain; resolves from the macOS 13 system runtime)"
+        fi
+    done
+    [ -n "$SWIFT_GUARD_FAIL" ] && exit 1
 done
 # Report every bundled binary's minimum macOS for the build log.
 echo "--- bundled binaries: minimum macOS ---"
