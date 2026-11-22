@@ -12,6 +12,11 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
+# Minimum macOS for the C libraries too (FFmpeg already passes
+# -mmacosx-version-min=13.0 explicitly; libmpv via meson did not,
+# so its dylib inherited the build machine's macOS and refused 13.x).
+export MACOSX_DEPLOYMENT_TARGET=13.0
+
 FFMPEG_VERSION="7.1.1"
 FFMPEG_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_SHA256="733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1"
@@ -92,6 +97,8 @@ export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig:/opt/homebrew/lib/pkgconfig:/opt/hom
 meson setup build \
     --prefix="$DEPS" \
     --buildtype=release \
+    -Dc_args="-mmacosx-version-min=13.0" \
+    -Dc_link_args="-mmacosx-version-min=13.0" \
     -Dgpl=false \
     -Dlibmpv=true \
     -Ddefault_library=shared \
