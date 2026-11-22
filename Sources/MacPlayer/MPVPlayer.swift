@@ -277,12 +277,13 @@ final class MPVPlayer {
 
     private func getStringProperty(_ name: String) -> String? {
         guard let handle else { return nil }
+        // libmpv: char *mpv_get_property_string(mpv_handle *, const char *)
+        // returns the string (NULL on error), no int result, no out-param.
         var cString: UnsafeMutablePointer<CChar>?
-        var result: Int32 = -1
         commandQueue.sync {
-            result = mpv_get_property_string(handle, name, &cString)
+            cString = mpv_get_property_string(handle, name)
         }
-        guard result >= 0, let cString else { return nil }
+        guard let cString else { return nil }
         defer { mpv_free(cString) }
         return String(cString: cString)
     }

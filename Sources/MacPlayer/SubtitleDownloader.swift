@@ -540,7 +540,7 @@ final class SubtitleDownloader {
         let query = makeQuery(for: videoURL)
         let providers = providers.filter { $0.isConfigured }
         guard !providers.isEmpty else { return [] }
-        let results = await withTimeout(seconds: 5) {
+        let results: [SubtitleItem] = await withTimeout(seconds: 5) {
             await withTaskGroup(of: [SubtitleItem].self) { group in
                 for provider in providers {
                     group.addTask {
