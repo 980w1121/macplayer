@@ -219,6 +219,38 @@ for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib
     done
 done
 
+# Fix LC_RPATH (v1.0.5 crash): rewriting load commands to @rpath is not
+# enough. The Swift compiler embeds its own RPATHs at link time — the
+# executable carries ['/usr/lib/swift',
+# '@executable_path/../Frameworks'], libmpv.2.dylib carries the Xcode
+# toolchain swift/macosx dir and '/usr/lib/swift' — and dyld resolves
+# @rpath in RPATH order, so it found the macOS 13 system Swift 5.9
+# libswiftCore in /usr/lib/swift first and never looked in the app's
+# Frameworks, where the bundled Swift 6.2 runtime sits. The bundled
+# runtime was therefore never used and the launch died with the same
+# missing-symbol error as v1.0.4. Delete every RPATH that points
+# outside the app; a binary that relied on RPATHs gets the Frameworks
+# RPATH so its own @rpath references still resolve.
+for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$binary" ] || continue
+    removed=""
+    for rp in $(otool -l "$binary" 2>/dev/null | awk '/LC_RPATH/{p=1} p && /path/{print $2; p=0}' || true); do
+        case "$rp" in
+            @executable_path/../Frameworks|@loader_path|@loader_path/../Frameworks) ;;
+            *)
+                echo "removing RPATH $rp from $(basename "$binary")"
+                install_name_tool -delete_rpath "$rp" "$binary" 2>/dev/null || true
+                removed=1
+                ;;
+        esac
+    done
+    if [ -n "$removed" ]; then
+        if ! otool -l "$binary" 2>/dev/null | awk '/LC_RPATH/{p=1} p && /path/{print $2; p=0}' | grep -qx '@executable_path/../Frameworks'; then
+            install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
+        fi
+    fi
+done
+
 # App icon: build MacPlayer.icns from assets/MacPlayer-icon-1024.png
 # (1024x1024) with sips + iconutil, if the source PNG is present.
 if [ -f assets/MacPlayer-icon-1024.png ]; then
@@ -290,6 +322,24 @@ for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     done
     [ -n "$SWIFT_GUARD_FAIL" ] && exit 1
 done
+# Guard: no bundled binary may carry an LC_RPATH pointing outside the
+# app (v1.0.5 crash: the Swift compiler embedded /usr/lib/swift and the
+# toolchain path as RPATHs in the executable and libmpv, so dyld
+# resolved @rpath/libswiftCore.dylib to the macOS 13 system Swift 5.9
+# runtime instead of the bundled one). The executable must keep
+# @executable_path/../Frameworks so @rpath resolves inside the app.
+for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] || continue
+    bad="$(otool -l "$f" 2>/dev/null | awk '/LC_RPATH/{p=1} p && /path/{print $2; p=0}' | grep -E '/usr/lib/swift|/Applications/|/Users/|/opt/homebrew/' || true)"
+    if [ -n "$bad" ]; then
+        echo "error: $f has RPATH outside the app: $bad" >&2
+        exit 1
+    fi
+done
+if ! otool -l "$APP/Contents/MacOS/MacPlayer" | awk '/LC_RPATH/{p=1} p && /path/{print $2; p=0}' | grep -qx '@executable_path/../Frameworks'; then
+    echo "error: MacPlayer executable lacks @executable_path/../Frameworks RPATH" >&2
+    exit 1
+fi
 # Report every bundled binary's minimum macOS for the build log.
 echo "--- bundled binaries: minimum macOS ---"
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
