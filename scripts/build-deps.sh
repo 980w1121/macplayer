@@ -342,8 +342,15 @@ if [ ! -f "$SC_SRC/third_party/spirv-headers/CMakeLists.txt" ]; then
     mkdir -p "$SC_SRC/third_party/spirv-headers"
     tar -xzf "$SPIRV_HEADERS_TAR" -C "$SC_SRC/third_party/spirv-headers" --strip-components=1
 fi
+# shaderc's real option is SHADERC_SKIP_TESTS (there is no
+# SHADERC_ENABLE_TESTS option — it is an internal variable derived
+# from SHADERC_SKIP_TESTS). Passing -DSHADERC_ENABLE_TESTS=OFF was
+# silently ignored, so tests stayed enabled and the configure step
+# aborted with "gmock was not found - required for tests" (run #23).
+# SHADERC_SKIP_TESTS=ON also makes shaderc skip SPIRV-Tools tests,
+# and glslang disables its own tests as a subproject.
 cmake_build "$SC_SRC" \
-    -DSHADERC_ENABLE_TESTS=OFF -DSHADERC_SKIP_EXAMPLES=ON \
+    -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
     -DCMAKE_PREFIX_PATH="$DEPS;/opt/homebrew"
 
 # --- libplacebo (mpv's gpu-next renderer) ---
