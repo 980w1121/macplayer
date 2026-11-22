@@ -75,9 +75,14 @@ while :; do
     [ "$after" = "$before" ] && break
 done
 # Rewrite @rpath references inside the bundled dylibs to the new location.
+# NOTE (run #11): the old grep was '^(@rpath|/opt/homebrew/|/Users/|deps/lib)/'
+# — the trailing '/' sat outside the group, so it demanded a double
+# slash ('/opt/homebrew//', '@rpath//') and matched nothing, leaving
+# absolute Homebrew paths in e.g. libass.9.dylib (freetype, fribidi,
+# harfbuzz, libunibreak). The '/' now belongs inside each alternative.
 for bundled in "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$bundled" ] || continue
-    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/|/Users/|deps/lib)/' | while read -r dep; do
+    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath/|/opt/homebrew/|/Users/|deps/lib/)' | while read -r dep; do
         base="$(basename "$dep")"
         install_name_tool -change "$dep" "@rpath/$base" "$bundled" 2>/dev/null || true
     done
