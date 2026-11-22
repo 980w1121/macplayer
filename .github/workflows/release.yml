@@ -1,15 +1,12 @@
 name: Release macOS arm64
 
-
 on:
   push:
     tags:
       - "v*"
 
-
 permissions:
   contents: write
-
 
 jobs:
   build:
@@ -18,23 +15,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-
       - name: Build LGPL deps (FFmpeg + libmpv)
         run: |
           chmod +x scripts/build-deps.sh build.sh
           ./scripts/build-deps.sh
 
-
       - name: Build MacPlayer.app
         run: ./build.sh
-
 
       - name: Verify arm64 app
         run: |
           test -d MacPlayer.app
           file MacPlayer.app/Contents/MacOS/MacPlayer
           lipo -info MacPlayer.app/Contents/MacOS/MacPlayer | grep -q arm64
-
 
       - name: Collect third-party licences
         run: |
@@ -61,14 +54,15 @@ jobs:
           EOF
           ls -R MacPlayer.app/Contents/Resources/LICENSES
 
-
       - name: Make DMG
         run: |
           TAG="${GITHUB_REF_NAME}"
-          hdiutil create -volname MacPlayer -srcfolder MacPlayer.app \
+          rm -rf dmg-staging && mkdir dmg-staging
+          cp -R MacPlayer.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname MacPlayer -srcfolder dmg-staging \
             -ov -format UDZO "MacPlayer-${TAG}-macos-arm64.dmg"
           ls -lh *.dmg
-
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
