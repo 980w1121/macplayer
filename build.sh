@@ -6,6 +6,13 @@
 set -eu
 cd "$(dirname "$0")"
 
+# Minimum macOS for the whole app. swiftc without an explicit target
+# defaults to the build machine's macOS, which made the v1.0.0 binary
+# refuse to run on macOS 13.7.8 ("this version can't be used with this
+# version of macOS"). Pin it here; build-deps.sh pins the same for the
+# C libraries.
+export MACOSX_DEPLOYMENT_TARGET=13.0
+
 if [ ! -f deps/lib/libmpv.dylib ]; then
     echo "error: deps/lib/libmpv.dylib not found — run ./scripts/build-deps.sh first" >&2
     exit 1
@@ -19,6 +26,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 # Sources/CMPV/module.modulemap; -Xcc -I passes the same paths to the
 # Clang importer so <mpv/client.h> / <mpv/render.h> resolve from deps.
 swiftc -O -whole-module-optimization \
+    -target arm64-apple-macos13.0 \
     -I Sources \
     -Xcc -ISources \
     -Xcc -Ideps/include \
@@ -68,5 +76,8 @@ done
 echo "--- checks ---"
 file "$APP/Contents/MacOS/MacPlayer"
 lipo -info "$APP/Contents/MacOS/MacPlayer"
+# Guard: the binary must declare minos 13.0, or macOS 13 refuses it.
+otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A2 LC_BUILD_VERSION | grep -q "minos 13.0" \
+    || { echo "error: MacPlayer minos is not 13.0" >&2; otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A2 LC_BUILD_VERSION >&2; exit 1; }
 ls -lh "$APP/Contents/Frameworks/" | head -30
 echo "Built: $APP"
