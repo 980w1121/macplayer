@@ -56,17 +56,28 @@ for lib in deps/lib/*.dylib; do
     [ -e "$lib" ] || continue
     copy_dylib "$lib"
 done
-# One pass over the bundled dylibs: copy any Homebrew dylib they link to.
-for bundled in "$APP"/Contents/Frameworks/*.dylib; do
-    [ -e "$bundled" ] || continue
-    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep '^/opt/homebrew/lib/.*\.dylib$' | while read -r dep; do
-        copy_dylib "$dep"
+# One pass over the bundled dylibs is not enough: a newly copied
+# Homebrew dylib (e.g. libX11) may itself link to another Homebrew
+# dylib (e.g. libXext), so copy to a fixpoint — repeat until a pass
+# adds nothing. Note the paths are /opt/homebrew/opt/<formula>/lib/…,
+# not /opt/homebrew/lib/ — the v1.0.2 run #10 failed exactly because
+# the old grep only matched /opt/homebrew/lib/ and libavcodec kept
+# absolute /opt/homebrew/opt/ references to libdav1d and libX11.
+while :; do
+    before="$(ls "$APP/Contents/Frameworks" | wc -l)"
+    for bundled in "$APP"/Contents/Frameworks/*.dylib; do
+        [ -e "$bundled" ] || continue
+        otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep '^/opt/homebrew/.*\.dylib$' | while read -r dep; do
+            copy_dylib "$dep"
+        done
     done
+    after="$(ls "$APP/Contents/Frameworks" | wc -l)"
+    [ "$after" = "$before" ] && break
 done
 # Rewrite @rpath references inside the bundled dylibs to the new location.
 for bundled in "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$bundled" ] || continue
-    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/lib|/Users/|deps/lib)/' | while read -r dep; do
+    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/|/Users/|deps/lib)/' | while read -r dep; do
         base="$(basename "$dep")"
         install_name_tool -change "$dep" "@rpath/$base" "$bundled" 2>/dev/null || true
     done
