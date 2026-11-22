@@ -76,7 +76,7 @@ jobs:
           files: MacPlayer-*-macos-arm64.dmg
           generate_release_notes: true
           body: |
-          MacPlayer — Apple Silicon arm64 only, unsigned.
-          First open: right-click the app and choose Open, or
-          System Settings → Privacy & Security → Open Anyway.
-          See README.md for the unsigned-app workaround.
+            MacPlayer — Apple Silicon arm64 only, unsigned.
+            First open: right-click the app and choose Open, or
+            System Settings → Privacy & Security → Open Anyway.
+            See README.md for the unsigned-app workaround.
