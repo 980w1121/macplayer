@@ -294,7 +294,15 @@ cmake_build "$BUILD/src/Vulkan-Loader-vulkan-sdk-${VULKAN_VERSION}" \
     -DCMAKE_PREFIX_PATH="$DEPS;/opt/homebrew"
 
 # --- shaderc stack (libplacebo's GLSL -> SPIR-V compiler) ---
-# All four are the Vulkan SDK 1.4.313.0 set, so their versions agree.
+# shaderc, glslang and SPIRV-Tools are the Vulkan SDK 1.4.313.0 set;
+# SPIRV-Headers is NOT: shaderc 2025.3's DEPS pins it at
+# 2a611a970fdbc41ac2e3e328802aed9985352dca, and the 1.4.313.0 headers
+# lack include/spirv/unified1/extinst.tosa.001000.1.grammar.json,
+# which SPIRV-Tools 2025.3's core_tables target needs — run #24 died
+# at 1% in make with "No rule to make target ... extinst.tosa...".
+# Fetch that exact commit via codeload (SHA256 measured 2026-11-23
+# from the downloaded tarball). The Vulkan-Loader still builds
+# against the 1.4.313 headers installed in $DEPS, unaffected.
 # shaderc's CMake builds glslang, SPIRV-Tools and SPIRV-Headers as
 # subprojects from its third_party/ dir, so nest the three tarballs
 # there instead of installing them separately.
@@ -310,9 +318,9 @@ SPIRV_TOOLS_VERSION="2025.3"
 SPIRV_TOOLS_URL="https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/v2025.3.tar.gz"
 SPIRV_TOOLS_SHA256="828f8a2ce2fd7172137af7dbc4a67305d97f63414dd61f0c77d8ede325606c0d"
 
-SPIRV_HEADERS_VERSION="1.4.313.0"
-SPIRV_HEADERS_URL="https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz"
-SPIRV_HEADERS_SHA256="f68be549d74afb61600a1e3a7d1da1e6b7437758c8e77d664909f88f302c5ac1"
+SPIRV_HEADERS_VERSION="2a611a970fdbc41ac2e3e328802aed9985352dca"
+SPIRV_HEADERS_URL="https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/2a611a970fdbc41ac2e3e328802aed9985352dca"
+SPIRV_HEADERS_SHA256="c2225a49c3d7efa5c4f4ce4a6b42081e6ea3daca376f3353d9d7c2722d77a28a"
 
 SC_TAR="$BUILD/src/shaderc-${SHADERC_VERSION}.tar.gz"
 download "$SHADERC_URL" "$SC_TAR"
