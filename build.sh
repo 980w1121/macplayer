@@ -142,6 +142,24 @@ otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "
 # Guard: the ad-hoc signature must verify, or macOS kills the app at
 # launch with "Code Signature Invalid" (v1.0.2 crash).
 codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; exit 1; }
+# Guard: no bundled binary may link a macOS 26-only system library
+# (v1.0.3 crash: Homebrew's freetype linked /usr/lib/libhvf.dylib,
+# which does not exist on macOS 13). Fail loudly in CI instead of
+# shipping an app that dies at launch.
+for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] || continue
+    if otool -L "$f" | grep -q '/usr/lib/libhvf\.dylib'; then
+        echo "error: $f links /usr/lib/libhvf.dylib (macOS 26-only)" >&2
+        exit 1
+    fi
+done
+# Report every bundled binary's minimum macOS for the build log.
+echo "--- bundled binaries: minimum macOS ---"
+for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] || continue
+    minos="$(otool -l "$f" | awk '/LC_BUILD_VERSION/{p=1} p&&/minos/{print $2; exit} /LC_VERSION_MIN_MACOSX/{q=1} q&&/version/{print $2; exit}')"
+    echo "$(basename "$f"): minos ${minos:-unknown}"
+done
 # Guard: the icon must be present when its source PNG is shipped.
 if [ -f assets/MacPlayer-icon-1024.png ]; then
     test -f "$APP/Contents/Resources/MacPlayer.icns" || { echo "error: MacPlayer.icns missing" >&2; exit 1; }
