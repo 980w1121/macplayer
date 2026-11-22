@@ -99,7 +99,37 @@ otool -L "$APP/Contents/MacOS/MacPlayer" | awk '{print $1}' | grep '\.dylib$' | 
     install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/MacPlayer"
 done
 
-# Unsigned on purpose (see README): no codesign step here.
+# App icon: build MacPlayer.icns from assets/MacPlayer-icon-1024.png
+# (1024x1024) with sips + iconutil, if the source PNG is present.
+if [ -f assets/MacPlayer-icon-1024.png ]; then
+    ICONSET="$(mktemp -d)/MacPlayer.iconset"
+    mkdir -p "$ICONSET"
+    sips -z 16 16     assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_16x16.png" >/dev/null
+    sips -z 32 32     assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+    sips -z 32 32     assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_32x32.png" >/dev/null
+    sips -z 64 64     assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+    sips -z 128 128   assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_128x128.png" >/dev/null
+    sips -z 256 256   assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+    sips -z 256 256   assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_256x256.png" >/dev/null
+    sips -z 512 512   assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+    sips -z 512 512   assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_512x512.png" >/dev/null
+    sips -z 1024 1024 assets/MacPlayer-icon-1024.png --out "$ICONSET/icon_512x512@2x.png" >/dev/null
+    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/MacPlayer.icns"
+    rm -rf "$(dirname "$ICONSET")"
+fi
+
+# Ad-hoc re-sign (no paid certificate): install_name_tool edits above
+# invalidate the dylibs' original signatures, and macOS 13 kills the
+# app at launch with "Code Signature Invalid" when a dependent dylib
+# fails validation (v1.0.2 crash). Re-sign every modified binary and
+# the bundle itself after all edits, then verify below.
+for f in "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] || continue
+    codesign --force --sign - --timestamp=none "$f"
+done
+codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/MacPlayer"
+codesign --force --sign - --timestamp=none "$APP"
+
 echo "--- checks ---"
 file "$APP/Contents/MacOS/MacPlayer"
 lipo -info "$APP/Contents/MacOS/MacPlayer"
@@ -109,6 +139,13 @@ lipo -info "$APP/Contents/MacOS/MacPlayer"
 # the minos line and failed even when minos was correct (run #8).
 otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "minos 13.0" \
     || { echo "error: MacPlayer minos is not 13.0" >&2; otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION >&2; exit 1; }
+# Guard: the ad-hoc signature must verify, or macOS kills the app at
+# launch with "Code Signature Invalid" (v1.0.2 crash).
+codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; exit 1; }
+# Guard: the icon must be present when its source PNG is shipped.
+if [ -f assets/MacPlayer-icon-1024.png ]; then
+    test -f "$APP/Contents/Resources/MacPlayer.icns" || { echo "error: MacPlayer.icns missing" >&2; exit 1; }
+fi
 # Guard: no absolute build-machine or Homebrew path may remain in the
 # executable's load commands, or the app dies at launch on other Macs.
 if otool -L "$APP/Contents/MacOS/MacPlayer" | grep -E '/Users/|/opt/homebrew/'; then

@@ -9,9 +9,13 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.macplayer.app</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.2</string>
+	<string>1.0.3</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.2</string>
+	<string>1.0.3</string>
+	<key>CFBundleIconFile</key>
+	<string>MacPlayer</string>
+	<key>CFBundleIconName</key>
+	<string>MacPlayer</string>
 	<key>CFBundleExecutable</key>
 	<string>MacPlayer</string>
 	<key>CFBundlePackageType</key>
