@@ -77,7 +77,10 @@ echo "--- checks ---"
 file "$APP/Contents/MacOS/MacPlayer"
 lipo -info "$APP/Contents/MacOS/MacPlayer"
 # Guard: the binary must declare minos 13.0, or macOS 13 refuses it.
-otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A2 LC_BUILD_VERSION | grep -q "minos 13.0" \
-    || { echo "error: MacPlayer minos is not 13.0" >&2; otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A2 LC_BUILD_VERSION >&2; exit 1; }
+# otool prints minos on the 3rd line after "cmd LC_BUILD_VERSION"
+# (cmdsize, platform, minos), so -A3 is required — -A2 never saw
+# the minos line and failed even when minos was correct (run #8).
+otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "minos 13.0" \
+    || { echo "error: MacPlayer minos is not 13.0" >&2; otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION >&2; exit 1; }
 ls -lh "$APP/Contents/Frameworks/" | head -30
 echo "Built: $APP"
