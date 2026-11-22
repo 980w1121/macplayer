@@ -459,6 +459,17 @@ if [ ! -d "$BUILD/src/ffmpeg-${FFMPEG_VERSION}" ]; then
     tar -xf "$FFMPEG_TAR" -C "$BUILD/src"
 fi
 cd "$BUILD/src/ffmpeg-${FFMPEG_VERSION}"
+# --disable-xlib --disable-libxcb*: run #26 failed at step 5 because
+# FFmpeg's configure auto-detected Homebrew's xlib and libxcb (both
+# [autodetect]), so every FFmpeg shared library linked Homebrew's
+# libX11.6.dylib (minos 26.0) and step 5 bundled the four X11 bottles
+# (libX11, libxcb, libXau, libXdmcp), failing build.sh's minos-13.0
+# guard. Neither is used: xlib/libxcb exist only for libavdevice's
+# X11 screen capture (x11grab/xcbgrab), and --disable-avdevice is
+# already on; mpv itself is built with -Dx11=disabled. Disabling
+# libxcb also auto-disables libxcb_shm/shape/xfixes (configure
+# line 7242), but list them explicitly so a future FFmpeg keeps them
+# off even if that coupling changes.
 ./configure \
     --prefix="$DEPS" \
     --arch=arm64 --target-os=darwin \
@@ -467,6 +478,8 @@ cd "$BUILD/src/ffmpeg-${FFMPEG_VERSION}"
     --extra-ldflags="-arch arm64 -mmacosx-version-min=13.0" \
     --enable-shared --disable-static --disable-programs \
     --disable-gpl --disable-doc --disable-avdevice \
+    --disable-xlib --disable-libxcb --disable-libxcb-shm \
+    --disable-libxcb-shape --disable-libxcb-xfixes \
     --enable-videotoolbox \
     --enable-libdav1d \
     --install-name-dir=@rpath
