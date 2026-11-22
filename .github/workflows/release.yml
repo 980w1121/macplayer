@@ -1,33 +1,40 @@
 name: Release macOS arm64
 
+
 on:
   push:
     tags:
       - "v*"
 
+
 permissions:
   contents: write
 
+
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
 
       - name: Build LGPL deps (FFmpeg + libmpv)
         run: |
           chmod +x scripts/build-deps.sh build.sh
           ./scripts/build-deps.sh
 
+
       - name: Build MacPlayer.app
         run: ./build.sh
+
 
       - name: Verify arm64 app
         run: |
           test -d MacPlayer.app
           file MacPlayer.app/Contents/MacOS/MacPlayer
           lipo -info MacPlayer.app/Contents/MacOS/MacPlayer | grep -q arm64
+
 
       - name: Collect third-party licences
         run: |
@@ -54,6 +61,7 @@ jobs:
           EOF
           ls -R MacPlayer.app/Contents/Resources/LICENSES
 
+
       - name: Make DMG
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -61,13 +69,5 @@ jobs:
             -ov -format UDZO "MacPlayer-${TAG}-macos-arm64.dmg"
           ls -lh *.dmg
 
+
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: MacPlayer-*-macos-arm64.dmg
-          generate_release_notes: true
-          body: |
-            MacPlayer — Apple Silicon arm64 only, unsigned.
-            First open: right-click the app and choose Open, or
-            System Settings → Privacy & Security → Open Anyway.
-            See README.md for the unsigned-app workaround.
