@@ -99,6 +99,54 @@ otool -L "$APP/Contents/MacOS/MacPlayer" | awk '{print $1}' | grep '\.dylib$' | 
     install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/MacPlayer"
 done
 
+# Bundle the Swift runtime (v1.0.4 crash fix).
+# mpv 0.42's macOS backend is written in Swift (osdep/mac/*.swift,
+# video/out/mac/*.swift), so libmpv.2.dylib links against the Swift
+# runtime. The macOS 26 runner's Swift 6.2 compiler emits a reference
+# to _$ss20__StaticArrayStorageCN, a symbol that does not exist in
+# macOS 13.7.8's system libswiftCore (Swift 5.9), so dyld aborts at
+# launch with "Symbol not found". The standard fix — the same one
+# Xcode applies as "Embed Swift Standard Libraries" — is to ship the
+# toolchain's Swift runtime dylibs inside the app and point every
+# reference at @rpath instead of /usr/lib/swift/.
+SWIFT_LIB_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/../lib/swift/macosx" && pwd)"
+copy_swift_lib() {
+    name="$1"
+    if [ ! -f "$APP/Contents/Frameworks/$name" ]; then
+        [ -f "$SWIFT_LIB_DIR/$name" ] || { echo "error: Swift runtime $name not found in $SWIFT_LIB_DIR" >&2; exit 1; }
+        cp -f "$SWIFT_LIB_DIR/$name" "$APP/Contents/Frameworks/$name"
+        chmod +w "$APP/Contents/Frameworks/$name"
+        install_name_tool -id "@rpath/$name" "$APP/Contents/Frameworks/$name"
+    fi
+}
+# Repeat to a fixpoint: a newly copied Swift dylib may itself link
+# another Swift dylib (e.g. libswiftFoundation links libswiftCore).
+SWIFT_DEPS_TMP="/tmp/macplayer-swift-deps.$$"
+while :; do
+    before="$(ls "$APP/Contents/Frameworks" | wc -l)"
+    : > "$SWIFT_DEPS_TMP"
+    for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+        [ -e "$binary" ] || continue
+        otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' >> "$SWIFT_DEPS_TMP" || true
+    done
+    for dep in $(sort -u "$SWIFT_DEPS_TMP"); do
+        copy_swift_lib "$(basename "$dep")"
+    done
+    after="$(ls "$APP/Contents/Frameworks" | wc -l)"
+    [ "$after" = "$before" ] && break
+done
+rm -f "$SWIFT_DEPS_TMP"
+# Rewrite every /usr/lib/swift/ reference in the executable and all
+# bundled dylibs (including the Swift dylibs themselves, which
+# reference each other by absolute path) to @rpath/<basename>.
+for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$binary" ] || continue
+    otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' | while read -r dep; do
+        base="$(basename "$dep")"
+        install_name_tool -change "$dep" "@rpath/$base" "$binary" 2>/dev/null || true
+    done
+done
+
 # App icon: build MacPlayer.icns from assets/MacPlayer-icon-1024.png
 # (1024x1024) with sips + iconutil, if the source PNG is present.
 if [ -f assets/MacPlayer-icon-1024.png ]; then
@@ -144,12 +192,18 @@ otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "
 codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; exit 1; }
 # Guard: no bundled binary may link a macOS 26-only system library
 # (v1.0.3 crash: Homebrew's freetype linked /usr/lib/libhvf.dylib,
-# which does not exist on macOS 13). Fail loudly in CI instead of
-# shipping an app that dies at launch.
+# which does not exist on macOS 13), and none may still point at the
+# system Swift runtime (v1.0.4 crash: libmpv needs a Swift 6.2 symbol
+# missing from macOS 13's libswiftCore — the runtime must be bundled).
+# Fail loudly in CI instead of shipping an app that dies at launch.
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$f" ] || continue
     if otool -L "$f" | grep -q '/usr/lib/libhvf\.dylib'; then
         echo "error: $f links /usr/lib/libhvf.dylib (macOS 26-only)" >&2
+        exit 1
+    fi
+    if otool -L "$f" | grep -q '/usr/lib/swift/'; then
+        echo "error: $f still links the system Swift runtime" >&2
         exit 1
     fi
 done
