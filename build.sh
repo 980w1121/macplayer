@@ -117,6 +117,16 @@ done
 # embeds from for old deployment targets), then anywhere under the
 # toolchain (macOS copies only), then the runner's system runtime
 # as a last resort.
+# NOTE (v1.0.6 crash): the Xcode 26.6 back-deployment dir
+# (swift-5.0/macosx) ships THIN x86_64-only runtime libs — 16 of the 17
+# bundled Swift libs were Intel-only, so dyld on Apple Silicon refused
+# them with "incompatible architecture (have 'x86_64', need 'arm64')".
+# The real arm64 Swift 6.2 runtime comes from the swift.org Swift 6.2
+# toolchain (installed by release.yml into
+# /Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain, or any
+# path in $SWIFT_ORG_RUNTIME_DIR), so search that FIRST, and never
+# accept a candidate without an arm64 slice — an x86_64-only lib is
+# skipped and the search continues instead of being bundled.
 # NOTE (run #16): `xcrun --find swiftc` is
 # .../XcodeDefault.xctoolchain/usr/bin/swiftc, so dirname/.. is the
 # toolchain's usr/ dir, NOT the toolchain root — the previous fix
@@ -133,20 +143,34 @@ done
 TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/.." && pwd)"
 SWIFT_LIB_DIR="$TOOLCHAIN_DIR/lib/swift/macosx"
 SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/lib/swift-5.0/macosx"
+SWIFT_ORG_RUNTIME_DIR="${SWIFT_ORG_RUNTIME_DIR:-/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain/usr/lib/swift/macosx}"
+has_arm64() {
+    lipo -archs "$1" 2>/dev/null | grep -qw arm64
+}
 find_swift_lib() {
     name="$1"
-    for dir in "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
+    for dir in "$SWIFT_ORG_RUNTIME_DIR" "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
         if [ -f "$dir/$name" ]; then
-            echo "$dir/$name"
-            return 0
+            if has_arm64 "$dir/$name"; then
+                echo "$dir/$name"
+                return 0
+            else
+                echo "note: skipping $dir/$name (no arm64 slice: $(lipo -archs "$dir/$name" 2>/dev/null))" >&2
+            fi
         fi
     done
-    found="$(find "$TOOLCHAIN_DIR" -path '*macosx*' -name "$name" -print -quit 2>/dev/null)"
-    if [ -n "$found" ]; then
-        echo "$found"
-        return 0
-    fi
-    if [ -f "/usr/lib/swift/$name" ]; then
+    while IFS= read -r found; do
+        [ -n "$found" ] || continue
+        if has_arm64 "$found"; then
+            echo "$found"
+            return 0
+        else
+            echo "note: skipping $found (no arm64 slice)" >&2
+        fi
+    done <<EOF
+$(find "$TOOLCHAIN_DIR" -path '*macosx*' -name "$name" -print 2>/dev/null)
+EOF
+    if [ -f "/usr/lib/swift/$name" ] && has_arm64 "/usr/lib/swift/$name"; then
         echo "/usr/lib/swift/$name"
         return 0
     fi
@@ -338,6 +362,26 @@ for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
 done
 if ! otool -l "$APP/Contents/MacOS/MacPlayer" | awk '/LC_RPATH/{p=1} p && /path/{print $2; p=0}' | grep -qx '@executable_path/../Frameworks'; then
     echo "error: MacPlayer executable lacks @executable_path/../Frameworks RPATH" >&2
+    exit 1
+fi
+# Guard: every bundled dylib must contain an arm64 slice (v1.0.6
+# crash: the Xcode 26.6 back-deploy Swift runtime libs are thin
+# x86_64-only, and dyld refuses them on Apple Silicon with
+# "incompatible architecture (have 'x86_64', need 'arm64')"). Fail
+# loudly in CI instead of shipping an app that dies at launch.
+for f in "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] || continue
+    if ! lipo -archs "$f" 2>/dev/null | grep -qw arm64; then
+        echo "error: $f has no arm64 slice: $(lipo -archs "$f" 2>/dev/null)" >&2
+        exit 1
+    fi
+done
+# Guard: libswiftCore must actually be bundled (v1.0.4 crash: the
+# macOS 13 system Swift 5.9 runtime lacks a Swift 6.2 symbol libmpv
+# needs, so a missing bundle would silently fall back to it and die
+# at launch with "Symbol not found" instead of failing here).
+if ! [ -f "$APP/Contents/Frameworks/libswiftCore.dylib" ]; then
+    echo "error: libswiftCore.dylib was not bundled" >&2
     exit 1
 fi
 # Report every bundled binary's minimum macOS for the build log.
