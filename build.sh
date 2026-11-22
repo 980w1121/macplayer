@@ -66,10 +66,21 @@ done
 # Rewrite @rpath references inside the bundled dylibs to the new location.
 for bundled in "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$bundled" ] || continue
-    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/lib|deps/lib)/' | while read -r dep; do
+    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/lib|/Users/|deps/lib)/' | while read -r dep; do
         base="$(basename "$dep")"
         install_name_tool -change "$dep" "@rpath/$base" "$bundled" 2>/dev/null || true
     done
+done
+
+# Rewrite the executable's own load commands: linking against
+# deps/lib/libmpv.dylib recorded libmpv's install name as the absolute
+# build-machine path (/Users/runner/.../libmpv.2.dylib), so on any other
+# Mac dyld aborted at launch with "Library not loaded: libmpv.2.dylib"
+# (v1.0.1 crash on macOS 13.7.8). Point every non-system, non-@rpath
+# dylib the executable links to at @rpath/<basename> instead.
+otool -L "$APP/Contents/MacOS/MacPlayer" | awk '{print $1}' | grep '\.dylib$' | grep -v -E '^(@rpath|/usr/lib/|/System/)' | while read -r dep; do
+    base="$(basename "$dep")"
+    install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/MacPlayer"
 done
 
 # Unsigned on purpose (see README): no codesign step here.
@@ -82,5 +93,22 @@ lipo -info "$APP/Contents/MacOS/MacPlayer"
 # the minos line and failed even when minos was correct (run #8).
 otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "minos 13.0" \
     || { echo "error: MacPlayer minos is not 13.0" >&2; otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION >&2; exit 1; }
+# Guard: no absolute build-machine or Homebrew path may remain in the
+# executable's load commands, or the app dies at launch on other Macs.
+if otool -L "$APP/Contents/MacOS/MacPlayer" | grep -E '/Users/|/opt/homebrew/'; then
+    echo "error: absolute dylib path remains in MacPlayer executable" >&2
+    otool -L "$APP/Contents/MacOS/MacPlayer" >&2
+    exit 1
+fi
+# Same guard for every bundled dylib: none may point at the build
+# machine's paths, or the app dies at launch on other Macs.
+for bundled in "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$bundled" ] || continue
+    if otool -L "$bundled" | grep -E '/Users/|/opt/homebrew/'; then
+        echo "error: absolute dylib path remains in $bundled" >&2
+        otool -L "$bundled" >&2
+        exit 1
+    fi
+done
 ls -lh "$APP/Contents/Frameworks/" | head -30
 echo "Built: $APP"
