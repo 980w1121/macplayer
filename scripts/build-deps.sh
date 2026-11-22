@@ -207,11 +207,11 @@ UCHARDET_VERSION="0.0.8"
 UCHARDET_URL="https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz"
 UCHARDET_SHA256="e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0"
 
-VULKAN_VERSION="1.4.313.0"
-VULKAN_LOADER_URL="https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz"
-VULKAN_LOADER_SHA256="c736fa79d974c3513f5573b74249ed002aab59f1d15d1c13fc1d00644830869a"
-VULKAN_HEADERS_URL="https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz"
-VULKAN_HEADERS_SHA256="20743c99a96c07290f24377360e7a12bdd2c465ba202e0c7ef2ec25d446cf61d"
+VULKAN_VERSION="1.4.321.0"
+VULKAN_LOADER_URL="https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/vulkan-sdk-1.4.321.0.tar.gz"
+VULKAN_LOADER_SHA256="9e0315bd13d8def7d130524d0b69d0bef3e967374327ac69dd9c54cd2b716e8f"
+VULKAN_HEADERS_URL="https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.321.0.tar.gz"
+VULKAN_HEADERS_SHA256="17f8ff30fd79fb7531efcb7c78c02c17a595208d482a150f06836b0ca97ef8f2"
 
 # libjpeg-turbo (mpv's image writer).
 JT_TAR="$BUILD/src/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"
@@ -267,8 +267,21 @@ cmake_build "$BUILD/src/uchardet-${UCHARDET_VERSION}" \
 # generated code (from its bundled 1.4.313 registry) calls it with
 # 1, so loader.c failed with "too few arguments to function call".
 # Homebrew's headers drift with every formula update, so pin the
-# matching 1.4.313.0 headers here into $DEPS and stop installing
+# matching headers here into $DEPS and stop installing
 # vulkan-headers from Homebrew (see the brew line above).
+# Run #25: bumped both loader and headers from 1.4.313.0 to
+# 1.4.321.0 — libplacebo 7.387.0's src/vulkan/context.c uses the KHR
+# maintenance1 identifiers (VK_KHR_SURFACE_MAINTENANCE_1_...,
+# VK_KHR_SWAPCHAIN_MAINTENANCE_1_...,
+# VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR) unconditionally,
+# but 1.4.313 headers only define the EXT versions, so context.c
+# failed with "use of undeclared identifier". The KHR versions were
+# verified present in 1.4.321.0 headers (all 280 VK identifiers used
+# by libplacebo checked against them); loader and headers stay at
+# the same SDK version so the loader's generated code matches the
+# headers (the run #22 skew class). SHA256s measured 2026-11-23
+# from the downloaded tarballs. glslang stays at 1.4.313.0 — its own
+# version, independent of this bump.
 VH_TAR="$BUILD/src/Vulkan-Headers-vulkan-sdk-${VULKAN_VERSION}.tar.gz"
 download "$VULKAN_HEADERS_URL" "$VH_TAR"
 verify_sha256 "$VH_TAR" "$VULKAN_HEADERS_SHA256" "Vulkan-Headers"
@@ -278,7 +291,7 @@ fi
 cmake_build "$BUILD/src/Vulkan-Headers-vulkan-sdk-${VULKAN_VERSION}"
 
 # Vulkan loader (libplacebo/mpv's Vulkan context; no X11/Wayland WSI
-# on macOS; Vulkan-Headers is the matching 1.4.313.0 copy built above
+# on macOS; Vulkan-Headers is the matching 1.4.321.0 copy built above
 # into $DEPS — CMAKE_PREFIX_PATH puts $DEPS first so the loader is
 # configured against those headers, not Homebrew's drifting ones).
 VL_TAR="$BUILD/src/Vulkan-Loader-vulkan-sdk-${VULKAN_VERSION}.tar.gz"
@@ -302,7 +315,7 @@ cmake_build "$BUILD/src/Vulkan-Loader-vulkan-sdk-${VULKAN_VERSION}" \
 # at 1% in make with "No rule to make target ... extinst.tosa...".
 # Fetch that exact commit via codeload (SHA256 measured 2026-11-23
 # from the downloaded tarball). The Vulkan-Loader still builds
-# against the 1.4.313 headers installed in $DEPS, unaffected.
+# against the headers installed in $DEPS (now 1.4.321.0), unaffected.
 # shaderc's CMake builds glslang, SPIRV-Tools and SPIRV-Headers as
 # subprojects from its third_party/ dir, so nest the three tarballs
 # there instead of installing them separately.
