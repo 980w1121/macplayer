@@ -384,12 +384,31 @@ if ! [ -f "$APP/Contents/Frameworks/libswiftCore.dylib" ]; then
     echo "error: libswiftCore.dylib was not bundled" >&2
     exit 1
 fi
-# Report every bundled binary's minimum macOS for the build log.
+# Guard: every bundled binary must declare minimum macOS 13.0 (v1.0.7
+# crash: Homebrew's libplacebo bottle declared minos 26.0 and
+# referenced a libc++ symbol added in macOS 14, so the app died at
+# launch on 13.7.8 with "Symbol not found"; the same applied to the
+# other bottles). A binary built for a newer macOS can still load
+# today if it happens not to reference a newer symbol, then die on
+# the next one — so fail loudly in CI instead of shipping it.
 echo "--- bundled binaries: minimum macOS ---"
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$f" ] || continue
     minos="$(otool -l "$f" | awk '/LC_BUILD_VERSION/{p=1} p&&/minos/{print $2; exit} /LC_VERSION_MIN_MACOSX/{q=1} q&&/version/{print $2; exit}')"
     echo "$(basename "$f"): minos ${minos:-unknown}"
+    major="${minos%%.*}"
+    case "$major" in
+        ''|*[!0-9]*)
+            echo "error: $(basename "$f") declares no minimum macOS" >&2
+            exit 1
+            ;;
+        *)
+            if [ "$major" -gt 13 ]; then
+                echo "error: $(basename "$f") requires macOS $minos (> 13.0) — build it from source with -mmacosx-version-min=13.0" >&2
+                exit 1
+            fi
+            ;;
+    esac
 done
 # Guard: the icon must be present when its source PNG is shipped.
 if [ -f assets/MacPlayer-icon-1024.png ]; then
