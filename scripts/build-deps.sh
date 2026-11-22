@@ -107,6 +107,11 @@ meson setup build \
     -Dhtml-build=disabled -Dpdf-build=disabled
 meson compile -C build
 meson install -C build
+# libmpv's install name defaults to the absolute build path
+# ($PWD/deps/lib/libmpv.2.dylib); the app would then look for it at
+# that path on the user's Mac and crash at launch. Point it at @rpath
+# so the bundled copy in Contents/Frameworks is used instead.
+install_name_tool -id @rpath/libmpv.2.dylib "$DEPS/lib/libmpv.2.dylib"
 cd "$ROOT"
 
 echo "--- deps ---"
