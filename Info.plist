@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>MacPlayer</string>
+	<key>CFBundleDisplayName</key>
+	<string>MacPlayer</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.macplayer.app</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleExecutable</key>
+	<string>MacPlayer</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Video</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.video</string>
+				<string>public.audio</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp4</string>
+				<string>mov</string>
+				<string>m4v</string>
+				<string>mkv</string>
+				<string>webm</string>
+				<string>avi</string>
+				<string>flv</string>
+				<string>wmv</string>
+				<string>mpg</string>
+				<string>mpeg</string>
+				<string>mp3</string>
+				<string>m4a</string>
+				<string>flac</string>
+				<string>wav</string>
+				<string>aac</string>
+				<string>ogg</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

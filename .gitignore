@@ -1,0 +1,7 @@
+MacPlayer.app/
+*.dmg
+deps/
+.deps-build/
+DerivedData/
+.DS_Store
+*.swp

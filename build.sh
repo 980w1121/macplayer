@@ -1,0 +1,72 @@
+#!/bin/sh
+# Build MacPlayer.app (Apple Silicon arm64 only, unsigned) with swiftc.
+# Run scripts/build-deps.sh first so deps/lib/libmpv.dylib exists.
+# No Xcode project is used: the app is a plain swiftc build over the
+# system frameworks plus the LGPL libmpv built by build-deps.sh.
+set -eu
+cd "$(dirname "$0")"
+
+if [ ! -f deps/lib/libmpv.dylib ]; then
+    echo "error: deps/lib/libmpv.dylib not found — run ./scripts/build-deps.sh first" >&2
+    exit 1
+fi
+
+APP="MacPlayer.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+
+# Compile all Swift sources. -I Sources lets `import CMPV` find
+# Sources/CMPV/module.modulemap; -Xcc -I passes the same paths to the
+# Clang importer so <mpv/client.h> / <mpv/render.h> resolve from deps.
+swiftc -O -whole-module-optimization \
+    -I Sources \
+    -Xcc -ISources \
+    -Xcc -Ideps/include \
+    -Xcc -ISources/CMPV \
+    -L deps/lib -lmpv \
+    -framework AppKit -framework AVFoundation -framework Metal \
+    -framework QuartzCore -framework Security -framework CoreMedia \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+    Sources/MacPlayer/*.swift \
+    -o "$APP/Contents/MacOS/MacPlayer"
+
+cp Info.plist "$APP/Contents/Info.plist"
+
+# Bundle libmpv and every dylib it links against that lives in deps/lib
+# or in the Homebrew prefix used at build time, and rewrite their
+# install names to @rpath so the app never depends on Homebrew at runtime.
+copy_dylib() {
+    src="$1"
+    base="$(basename "$src")"
+    if [ ! -f "$APP/Contents/Frameworks/$base" ]; then
+        cp -f "$src" "$APP/Contents/Frameworks/$base" 2>/dev/null || true
+        chmod +w "$APP/Contents/Frameworks/$base" 2>/dev/null || true
+        install_name_tool -id "@rpath/$base" "$APP/Contents/Frameworks/$base" 2>/dev/null || true
+    fi
+}
+for lib in deps/lib/*.dylib; do
+    [ -e "$lib" ] || continue
+    copy_dylib "$lib"
+done
+# One pass over the bundled dylibs: copy any Homebrew dylib they link to.
+for bundled in "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$bundled" ] || continue
+    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep '^/opt/homebrew/lib/.*\.dylib$' | while read -r dep; do
+        copy_dylib "$dep"
+    done
+done
+# Rewrite @rpath references inside the bundled dylibs to the new location.
+for bundled in "$APP"/Contents/Frameworks/*.dylib; do
+    [ -e "$bundled" ] || continue
+    otool -L "$bundled" 2>/dev/null | awk '{print $1}' | grep -E '^(@rpath|/opt/homebrew/lib|deps/lib)/' | while read -r dep; do
+        base="$(basename "$dep")"
+        install_name_tool -change "$dep" "@rpath/$base" "$bundled" 2>/dev/null || true
+    done
+done
+
+# Unsigned on purpose (see README): no codesign step here.
+echo "--- checks ---"
+file "$APP/Contents/MacOS/MacPlayer"
+lipo -info "$APP/Contents/MacOS/MacPlayer"
+ls -lh "$APP/Contents/Frameworks/" | head -30
+echo "Built: $APP"
