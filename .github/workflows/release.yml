@@ -1,0 +1,73 @@
+name: Release macOS arm64
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build LGPL deps (FFmpeg + libmpv)
+        run: |
+          chmod +x scripts/build-deps.sh build.sh
+          ./scripts/build-deps.sh
+
+      - name: Build MacPlayer.app
+        run: ./build.sh
+
+      - name: Verify arm64 app
+        run: |
+          test -d MacPlayer.app
+          file MacPlayer.app/Contents/MacOS/MacPlayer
+          lipo -info MacPlayer.app/Contents/MacOS/MacPlayer | grep -q arm64
+
+      - name: Collect third-party licences
+        run: |
+          mkdir -p MacPlayer.app/Contents/Resources/LICENSES
+          # Copy licence texts shipped with the built deps when present;
+          # otherwise leave the README note that names the sources.
+          for f in deps/share/doc/*/LICENSE deps/share/doc/*/COPYING deps/lib/pkgconfig/../../share/licenses/*; do
+            [ -f "$f" ] && cp -f "$f" MacPlayer.app/Contents/Resources/LICENSES/ 2>/dev/null || true
+          done
+          cat > MacPlayer.app/Contents/Resources/LICENSES/README.txt <<'EOF'
+          Third-party licences (LGPL)
+          -----------------------------
+          MacPlayer itself is MIT (see LICENSE in the repo).
+          The bundled playback engine is built from:
+            - libmpv  (LGPLv2.1+, built with meson -Dgpl=false)
+              https://github.com/mpv-player/mpv
+            - FFmpeg  (LGPLv2.1+, built with --disable-gpl)
+              https://ffmpeg.org
+            - libplacebo, libass, dav1d (see their own licence files)
+          The engine ships as separate dynamic libraries in
+          Contents/Frameworks/ with @rpath install names, so a compatible
+          library can be swapped in (LGPL relinking). The build scripts
+          in scripts/build-deps.sh reproduce the exact build.
+          EOF
+          ls -R MacPlayer.app/Contents/Resources/LICENSES
+
+      - name: Make DMG
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          hdiutil create -volname MacPlayer -srcfolder MacPlayer.app \
+            -ov -format UDZO "MacPlayer-${TAG}-macos-arm64.dmg"
+          ls -lh *.dmg
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MacPlayer-*-macos-arm64.dmg
+          generate_release_notes: true
+          body: |
+            MacPlayer — Apple Silicon arm64 only, unsigned.
+            First open: right-click the app and choose Open, or
+            System Settings → Privacy & Security → Open Anyway.
+            See README.md for the unsigned-app workaround.
