@@ -113,12 +113,19 @@ meson_build() {
 
 cmake_build() {
     # $1 = source dir, rest = extra cmake -D options
+    # -DCMAKE_POLICY_VERSION_MINIMUM=3.5: uchardet 0.0.8's
+    # CMakeLists requests cmake_minimum_required below 3.5, and the
+    # runner's CMake 4.x removed compatibility with CMake < 3.5, so
+    # its configure step aborted immediately (run #21). The flag only
+    # matters for projects whose minimum is below 3.5; it is
+    # harmless for modern ones.
     src="$1"; shift
     (cd "$src" && cmake -S . -B build \
         -DCMAKE_INSTALL_PREFIX="$DEPS" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
         -DCMAKE_OSX_ARCHITECTURES=arm64 \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         "$@" && cmake --build build -j"$(sysctl -n hw.ncpu)" && cmake --install build)
 }
 
@@ -238,6 +245,11 @@ meson_build "$BUILD/src/dav1d-${DAV1D_VERSION}" \
     -Denable_tools=false -Denable_tests=false
 
 # uchardet (mpv's subtitle charset detection).
+# uchardet 0.0.8's CMakeLists.txt declares cmake_minimum_required
+# below 3.5, which CMake 4 on the runner refuses ("Compatibility
+# with CMake < 3.5 has been removed from CMake"). Pass the policy
+# minimum so the old project still configures (its own minimum is
+# honoured by the flag; nothing else in the project changes).
 UC_TAR="$BUILD/src/uchardet-${UCHARDET_VERSION}.tar.xz"
 download "$UCHARDET_URL" "$UC_TAR"
 verify_sha256 "$UC_TAR" "$UCHARDET_SHA256" "uchardet"
@@ -245,7 +257,8 @@ if [ ! -d "$BUILD/src/uchardet-${UCHARDET_VERSION}" ]; then
     tar -xf "$UC_TAR" -C "$BUILD/src"
 fi
 cmake_build "$BUILD/src/uchardet-${UCHARDET_VERSION}" \
-    -DBUILD_SHARED_LIBS=ON
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 # Vulkan loader (libplacebo/mpv's Vulkan context; no X11/Wayland WSI
 # on macOS; Vulkan-Headers comes from Homebrew via CMAKE_PREFIX_PATH).
