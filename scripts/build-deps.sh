@@ -41,10 +41,7 @@ mkdir -p "$DEPS" "$BUILD" "$BUILD/src"
 # dropped entirely (mpv is built with -Dx11=disabled; macOS does not
 # need X11). MoltenVK is NOT bundled: its ICD is a separate problem
 # (vo=gpu-next finds no Vulkan driver at runtime) — see README.
-brew install meson ninja pkg-config nasm autoconf automake libtool \
-    cmake vulkan-headers 2>/dev/null \
-    || brew install meson ninja pkg-config nasm autoconf automake libtool \
-        cmake
+brew install meson ninja pkg-config nasm autoconf automake libtool cmake
 
 verify_sha256() {
     file="$1"; expected="$2"; label="$3"
@@ -213,6 +210,8 @@ UCHARDET_SHA256="e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f
 VULKAN_VERSION="1.4.313.0"
 VULKAN_LOADER_URL="https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz"
 VULKAN_LOADER_SHA256="c736fa79d974c3513f5573b74249ed002aab59f1d15d1c13fc1d00644830869a"
+VULKAN_HEADERS_URL="https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz"
+VULKAN_HEADERS_SHA256="20743c99a96c07290f24377360e7a12bdd2c465ba202e0c7ef2ec25d446cf61d"
 
 # libjpeg-turbo (mpv's image writer).
 JT_TAR="$BUILD/src/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"
@@ -260,8 +259,28 @@ cmake_build "$BUILD/src/uchardet-${UCHARDET_VERSION}" \
     -DBUILD_SHARED_LIBS=ON \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
+# Vulkan-Headers (the loader's compile-time headers), built from
+# source at the same SDK version as the loader.
+# Run #22: the loader 1.4.313.0 failed to compile against Homebrew's
+# vulkan-headers 1.4.363.0 — the newer headers declare
+# PFN_vkCmdDispatchTileQCOM with 2 arguments, while the loader's
+# generated code (from its bundled 1.4.313 registry) calls it with
+# 1, so loader.c failed with "too few arguments to function call".
+# Homebrew's headers drift with every formula update, so pin the
+# matching 1.4.313.0 headers here into $DEPS and stop installing
+# vulkan-headers from Homebrew (see the brew line above).
+VH_TAR="$BUILD/src/Vulkan-Headers-vulkan-sdk-${VULKAN_VERSION}.tar.gz"
+download "$VULKAN_HEADERS_URL" "$VH_TAR"
+verify_sha256 "$VH_TAR" "$VULKAN_HEADERS_SHA256" "Vulkan-Headers"
+if [ ! -d "$BUILD/src/Vulkan-Headers-vulkan-sdk-${VULKAN_VERSION}" ]; then
+    tar -xzf "$VH_TAR" -C "$BUILD/src"
+fi
+cmake_build "$BUILD/src/Vulkan-Headers-vulkan-sdk-${VULKAN_VERSION}"
+
 # Vulkan loader (libplacebo/mpv's Vulkan context; no X11/Wayland WSI
-# on macOS; Vulkan-Headers comes from Homebrew via CMAKE_PREFIX_PATH).
+# on macOS; Vulkan-Headers is the matching 1.4.313.0 copy built above
+# into $DEPS — CMAKE_PREFIX_PATH puts $DEPS first so the loader is
+# configured against those headers, not Homebrew's drifting ones).
 VL_TAR="$BUILD/src/Vulkan-Loader-vulkan-sdk-${VULKAN_VERSION}.tar.gz"
 download "$VULKAN_LOADER_URL" "$VL_TAR"
 verify_sha256 "$VL_TAR" "$VULKAN_LOADER_SHA256" "Vulkan-Loader"
@@ -272,7 +291,7 @@ cmake_build "$BUILD/src/Vulkan-Loader-vulkan-sdk-${VULKAN_VERSION}" \
     -DBUILD_SHARED_LIBS=ON -DBUILD_TESTS=OFF \
     -DBUILD_WSI_XCB_SUPPORT=OFF -DBUILD_WSI_XLIB_SUPPORT=OFF \
     -DBUILD_WSI_WAYLAND_SUPPORT=OFF \
-    -DCMAKE_PREFIX_PATH=/opt/homebrew
+    -DCMAKE_PREFIX_PATH="$DEPS;/opt/homebrew"
 
 # --- shaderc stack (libplacebo's GLSL -> SPIR-V compiler) ---
 # All four are the Vulkan SDK 1.4.313.0 set, so their versions agree.
@@ -324,7 +343,8 @@ if [ ! -f "$SC_SRC/third_party/spirv-headers/CMakeLists.txt" ]; then
     tar -xzf "$SPIRV_HEADERS_TAR" -C "$SC_SRC/third_party/spirv-headers" --strip-components=1
 fi
 cmake_build "$SC_SRC" \
-    -DSHADERC_ENABLE_TESTS=OFF -DSHADERC_SKIP_EXAMPLES=ON
+    -DSHADERC_ENABLE_TESTS=OFF -DSHADERC_SKIP_EXAMPLES=ON \
+    -DCMAKE_PREFIX_PATH="$DEPS;/opt/homebrew"
 
 # --- libplacebo (mpv's gpu-next renderer) ---
 # The release tarball ships its 3rdparty/ git submodules EMPTY, and
