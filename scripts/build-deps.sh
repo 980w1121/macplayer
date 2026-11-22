@@ -34,9 +34,9 @@ mkdir -p "$DEPS" "$BUILD" "$BUILD/src"
 # it; whether the macOS runner already ships a usable MoltenVK is an
 # unverified point — see README / final report.
 brew install meson ninja pkg-config nasm autoconf automake libtool \
-    libplacebo libass dav1d uchardet molten-vk vulkan-headers 2>/dev/null \
+    libplacebo dav1d uchardet molten-vk vulkan-headers 2>/dev/null \
     || brew install meson ninja pkg-config nasm autoconf automake libtool \
-        libplacebo libass dav1d uchardet molten-vk
+        libplacebo dav1d uchardet molten-vk
 
 verify_sha256() {
     file="$1"; expected="$2"; label="$3"
@@ -61,6 +61,107 @@ download() {
         curl -L --fail -o "$out" "$url"
     fi
 }
+
+# --- Font stack, built from source (v1.0.3 crash fix) ---
+# Homebrew's prebuilt bottles for libass/freetype are compiled on the
+# runner's macOS 26: freetype is built for macOS 26 and links
+# /usr/lib/libhvf.dylib, which does not exist on macOS 13, so the app
+# died at launch on 13.7.8. Build the whole font stack from source
+# with -mmacosx-version-min=13.0 instead, into $DEPS, so mpv links
+# these copies (PKG_CONFIG_PATH puts $DEPS first).
+FREETYPE_VERSION="2.13.3"
+FREETYPE_URL="https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz"
+FREETYPE_SHA256="0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
+
+HARFBUZZ_VERSION="11.3.1"
+HARFBUZZ_URL="https://github.com/harfbuzz/harfbuzz/releases/download/11.3.1/harfbuzz-11.3.1.tar.xz"
+HARFBUZZ_SHA256="d554cca69023178664d36d843af9516e2e2c4c5dfcd117d773a3529f446efa7b"
+
+FRIBIDI_VERSION="1.0.16"
+FRIBIDI_URL="https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz"
+FRIBIDI_SHA256="1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c"
+
+LIBUNIBREAK_VERSION="6.1"
+LIBUNIBREAK_URL="https://github.com/adah1972/libunibreak/releases/download/libunibreak_6_1/libunibreak-6.1.tar.gz"
+LIBUNIBREAK_SHA256="cc4de0099cf7ff05005ceabff4afed4c582a736abc38033e70fdac86335ce93f"
+
+LIBASS_VERSION="0.17.4"
+LIBASS_URL="https://github.com/libass/libass/releases/download/0.17.4/libass-0.17.4.tar.xz"
+LIBASS_SHA256="78f1179b838d025e9c26e8fef33f8092f65611444ffa1bfc0cfac6a33511a05a"
+
+export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig:/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig"
+
+meson_build() {
+    # $1 = source dir, rest = extra meson -D options
+    src="$1"; shift
+    (cd "$src" && meson setup build \
+        --prefix="$DEPS" \
+        --buildtype=release \
+        -Ddefault_library=shared \
+        -Dc_args="-mmacosx-version-min=13.0" \
+        -Dc_link_args="-mmacosx-version-min=13.0" \
+        "$@" && meson compile -C build && meson install -C build)
+}
+
+# freetype (no libpng/brotli/bzip2/harfbuzz: keeps it free of extra
+# Homebrew bottles; system zlib is fine, it ships with macOS 13).
+FT_TAR="$BUILD/src/freetype-${FREETYPE_VERSION}.tar.xz"
+download "$FREETYPE_URL" "$FT_TAR"
+verify_sha256 "$FT_TAR" "$FREETYPE_SHA256" "freetype"
+if [ ! -d "$BUILD/src/freetype-${FREETYPE_VERSION}" ]; then
+    tar -xf "$FT_TAR" -C "$BUILD/src"
+fi
+meson_build "$BUILD/src/freetype-${FREETYPE_VERSION}" \
+    -Dpng=disabled -Dzlib=system -Dbrotli=disabled -Dbzip2=disabled \
+    -Dharfbuzz=disabled -Dtests=disabled
+
+# harfbuzz (freetype support on; glib/cairo/icu off: no extra bottles).
+HB_TAR="$BUILD/src/harfbuzz-${HARFBUZZ_VERSION}.tar.xz"
+download "$HARFBUZZ_URL" "$HB_TAR"
+verify_sha256 "$HB_TAR" "$HARFBUZZ_SHA256" "harfbuzz"
+if [ ! -d "$BUILD/src/harfbuzz-${HARFBUZZ_VERSION}" ]; then
+    tar -xf "$HB_TAR" -C "$BUILD/src"
+fi
+meson_build "$BUILD/src/harfbuzz-${HARFBUZZ_VERSION}" \
+    -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled \
+    -Dcairo=disabled -Dchafa=disabled -Dicu=disabled \
+    -Dtests=disabled -Ddocs=disabled -Dutilities=disabled
+
+# fribidi (skip docs/tools/tests).
+FB_TAR="$BUILD/src/fribidi-${FRIBIDI_VERSION}.tar.xz"
+download "$FRIBIDI_URL" "$FB_TAR"
+verify_sha256 "$FB_TAR" "$FRIBIDI_SHA256" "fribidi"
+if [ ! -d "$BUILD/src/fribidi-${FRIBIDI_VERSION}" ]; then
+    tar -xf "$FB_TAR" -C "$BUILD/src"
+fi
+meson_build "$BUILD/src/fribidi-${FRIBIDI_VERSION}" \
+    -Ddocs=false -Dbin=false -Dtests=false
+
+# libunibreak (autotools only).
+UB_TAR="$BUILD/src/libunibreak-${LIBUNIBREAK_VERSION}.tar.gz"
+download "$LIBUNIBREAK_URL" "$UB_TAR"
+verify_sha256 "$UB_TAR" "$LIBUNIBREAK_SHA256" "libunibreak"
+if [ ! -d "$BUILD/src/libunibreak-${LIBUNIBREAK_VERSION}" ]; then
+    tar -xzf "$UB_TAR" -C "$BUILD/src"
+fi
+(cd "$BUILD/src/libunibreak-${LIBUNIBREAK_VERSION}" && \
+    CFLAGS="-mmacosx-version-min=13.0" \
+    LDFLAGS="-mmacosx-version-min=13.0" \
+    ./configure --prefix="$DEPS" --disable-static --enable-shared && \
+    make -j"$(sysctl -n hw.ncpu)" && make install)
+
+# libass (Core Text font provider on macOS, no fontconfig: fontconfig
+# would pull another Homebrew bottle; libunibreak on).
+LA_TAR="$BUILD/src/libass-${LIBASS_VERSION}.tar.xz"
+download "$LIBASS_URL" "$LA_TAR"
+verify_sha256 "$LA_TAR" "$LIBASS_SHA256" "libass"
+if [ ! -d "$BUILD/src/libass-${LIBASS_VERSION}" ]; then
+    tar -xf "$LA_TAR" -C "$BUILD/src"
+fi
+meson_build "$BUILD/src/libass-${LIBASS_VERSION}" \
+    -Dfontconfig=disabled -Dcoretext=enabled -Dlibunibreak=enabled \
+    -Dtest=disabled -Dcompare=disabled -Dprofile=disabled \
+    -Dfuzz=disabled -Dcheckasm=disabled
 
 # --- FFmpeg (LGPL) ---
 FFMPEG_TAR="$BUILD/src/ffmpeg-${FFMPEG_VERSION}.tar.xz"
