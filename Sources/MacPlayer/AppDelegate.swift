@@ -17,9 +17,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        let urls = filenames.map { URL(fileURLWithPath: $0) }
+    // v1.0.8 crash: the plural openFiles: [String] force-casts the
+    // NSArray AppKit delivers to [String], but on macOS 13 AppKit
+    // passes NSURL objects, so the cast aborts in
+    // _unconditionallyBridgeFromObjectiveC before any of our code
+    // runs. IINA uses the singular openFile: instead, and the modern
+    // openURLs: [URL] bridges safely because NSURL bridges to URL.
+    // Never re-add the plural openFiles: [String] form — the CI
+    // guard in build.sh fails the build if it reappears.
+    func application(_ sender: NSApplication, openURLs urls: [URL]) {
         windowController?.open(urls: urls)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        windowController?.open(urls: [URL(fileURLWithPath: filename)])
+        return true
     }
 
     // MARK: - Menu
