@@ -18,6 +18,18 @@ if [ ! -f deps/lib/libmpv.dylib ]; then
     exit 1
 fi
 
+# Guard: the plural openFiles: [String] delegate method must never
+# come back (v1.0.8 crash: AppKit passes NSURL objects on macOS 13,
+# and the NSArray-to-[String] force-cast aborts before our code
+# runs). The fix is the modern openURLs: [URL] (NSURL bridges to
+# URL safely) plus the singular openFile: as a fallback — the same
+# shape IINA uses. Fail fast here, before compiling, instead of
+# shipping an app that dies the first time the system hands it a file.
+if grep -rn 'func application.*openFiles' Sources/; then
+    echo "error: plural openFiles delegate method found — use openURLs: [URL] / singular openFile: instead (v1.0.8 crash)" >&2
+    exit 1
+fi
+
 APP="MacPlayer.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
