@@ -22,10 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // passes NSURL objects, so the cast aborts in
     // _unconditionallyBridgeFromObjectiveC before any of our code
     // runs. IINA uses the singular openFile: instead, and the modern
-    // openURLs: [URL] bridges safely because NSURL bridges to URL.
+    // application(_:open:) bridges safely because NSURL bridges to
+    // URL. (Spelled `open urls:` in Swift — `openURLs:` was renamed
+    // in Swift 3; using the old spelling is a compile error.)
     // Never re-add the plural openFiles: [String] form — the CI
     // guard in build.sh fails the build if it reappears.
-    func application(_ sender: NSApplication, openURLs urls: [URL]) {
+    func application(_ sender: NSApplication, open urls: [URL]) {
         windowController?.open(urls: urls)
     }
 
