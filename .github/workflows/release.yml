@@ -37,8 +37,11 @@ jobs:
     if: needs.version.outputs.should_release == 'true'
     runs-on: macos-latest
     env:
-      TOOLCHAINS: swift-5.10.1-RELEASE
       MACPLAYER_USE_SYSTEM_SWIFT: "1"
+      # Force meson's Swift compiler to 5.10.1 for libmpv (meson
+      # respects SWIFT like it respects CC); plain `swiftc` already
+      # resolves to 5.10.1 via the PATH entry in the install step.
+      SWIFT: /Library/Developer/Toolchains/swift-5.10.1-RELEASE.xctoolchain/usr/bin/swiftc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,8 +57,10 @@ jobs:
           # 5.9 system runtime, so the app uses the system runtime
           # as-is and build.sh skips bundling (MACPLAYER_USE_SYSTEM_SWIFT=1).
           # Install it FIRST so libmpv (build-deps.sh) is also built
-          # with 5.10.1. TOOLCHAINS + the PATH entry below make both
-          # xcrun and plain swiftc resolve to 5.10.1.
+          # with 5.10.1. The PATH entry below makes plain `swiftc`
+          # resolve to 5.10.1 (TOOLCHAINS did not affect xcrun in
+          # run #39, so it is not used); the SWIFT env var forces
+          # meson to the same compiler for libmpv.
           curl -LO https://download.swift.org/swift-5.10.1-release/xcode/swift-5.10.1-RELEASE/swift-5.10.1-RELEASE-osx.pkg
           sudo installer -pkg swift-5.10.1-RELEASE-osx.pkg -target /
           echo "/Library/Developer/Toolchains/swift-5.10.1-RELEASE.xctoolchain/usr/bin" >> "$GITHUB_PATH"
@@ -69,7 +74,9 @@ jobs:
           ./scripts/build-deps.sh
 
       - name: Build MacPlayer.app
-        run: ./build.sh
+        run: |
+          swiftc --version
+          ./build.sh
 
       - name: Verify arm64 app
         run: |
