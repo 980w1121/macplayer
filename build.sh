@@ -278,7 +278,12 @@ for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib
     [ -e "$binary" ] || continue
     for dep in $(otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
         base="$(basename "$dep")"
-        [ -f "$APP/Contents/Frameworks/$base" ] && continue
+        # NOTE (run #34): do NOT `continue` here when the stub already
+        # exists — the `if [ ! -f ... ]` below already skips rebuilding
+        # it, and a `continue` would also skip the install_name_tool
+        # -change for this binary, leaving it linked to /usr/lib/swift/
+        # (libmpv kept /usr/lib/swift/libswiftCoreFoundation.dylib and
+        # tripped the system-Swift guard below).
         if [ ! -f "$APP/Contents/Frameworks/$base" ]; then
             echo "stubbing unbundled Swift library $base"
             cc -dynamiclib -arch arm64 -mmacosx-version-min=13.0 \
