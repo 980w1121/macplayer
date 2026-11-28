@@ -75,6 +75,7 @@ final class PlayerWindowController: NSWindowController, MPVPlayerDelegate, NSTab
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
+        NSLog("MacPlayer: window ordered front")
         ensurePlayer()
         installKeyMonitor()
     }
@@ -106,7 +107,12 @@ final class PlayerWindowController: NSWindowController, MPVPlayerDelegate, NSTab
         seekSlider.target = self; seekSlider.action = #selector(seekSliderChanged(_:))
         volumeSlider.target = self; volumeSlider.action = #selector(volumeChanged(_:))
         speedPopup.addItems(withTitles: ["0.25x", "0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x"])
-        speedPopup.selectItem(withTitle: "1x")
+        // v1.0.10: select by index, not by title. selectItem(withTitle:)
+        // compares titles with isEqualToString:, and with a broken
+        // Swift runtime that call died with "-[__SwiftValue
+        // isEqualToString:]: unrecognized selector" at launch.
+        // "1x" is index 3 in the list above.
+        speedPopup.selectItem(at: 3)
         speedPopup.target = self; speedPopup.action = #selector(speedChanged(_:))
         subtitleButton.target = self; subtitleButton.action = #selector(searchSubtitlesOnline(_:))
         screenshotButton.target = self; screenshotButton.action = #selector(takeScreenshot(_:))
@@ -193,6 +199,12 @@ final class PlayerWindowController: NSWindowController, MPVPlayerDelegate, NSTab
 
     func open(urls: [URL]) {
         guard !urls.isEmpty else { return }
+        // v1.0.10: opening a file must always leave the window visible
+        // and the app active — a file-open request is the one moment
+        // the user is definitely looking at the app.
+        showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSLog("MacPlayer: opening %d file(s)", urls.count)
         ensurePlayer()
         let added = PlaylistStore.shared.add(urls: urls)
         playlistTable.reloadData()
