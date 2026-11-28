@@ -36,25 +36,37 @@ jobs:
     needs: version
     if: needs.version.outputs.should_release == 'true'
     runs-on: macos-latest
+    env:
+      TOOLCHAINS: swift-5.10.1-RELEASE
+      MACPLAYER_USE_SYSTEM_SWIFT: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Swift 5.10.1 toolchain (system runtime, no bundling)
+        run: |
+          # v1.0.11: compile with swift.org Swift 5.10.1 instead of
+          # Xcode's Swift 6.2. Swift 6.2 emits a reference to
+          # _$ss20__StaticArrayStorageCN, a symbol the macOS 13 system
+          # Swift 5.9 runtime lacks (v1.0.4 crash) — and no real arm64
+          # Swift overlay exists on the runner to bundle instead
+          # (run #37). Swift 5.10.1 emits only symbols already in the
+          # 5.9 system runtime, so the app uses the system runtime
+          # as-is and build.sh skips bundling (MACPLAYER_USE_SYSTEM_SWIFT=1).
+          # Install it FIRST so libmpv (build-deps.sh) is also built
+          # with 5.10.1. TOOLCHAINS + the PATH entry below make both
+          # xcrun and plain swiftc resolve to 5.10.1.
+          curl -LO https://download.swift.org/swift-5.10.1-release/xcode/swift-5.10.1-RELEASE/swift-5.10.1-RELEASE-osx.pkg
+          sudo installer -pkg swift-5.10.1-RELEASE-osx.pkg -target /
+          echo "/Library/Developer/Toolchains/swift-5.10.1-RELEASE.xctoolchain/usr/bin" >> "$GITHUB_PATH"
+          echo "swiftc: $(which swiftc)"
+          /Library/Developer/Toolchains/swift-5.10.1-RELEASE.xctoolchain/usr/bin/swiftc --version
+          echo "xcrun swiftc: $(xcrun --find swiftc)"
 
       - name: Build LGPL deps (FFmpeg + libmpv)
         run: |
           chmod +x scripts/build-deps.sh build.sh
           ./scripts/build-deps.sh
-
-      - name: Install Swift 6.2 toolchain (arm64 runtime libs)
-        run: |
-          # v1.0.6 crash: the Xcode 26.6 back-deploy Swift runtime libs
-          # (swift-5.0/macosx) are thin x86_64-only, and dyld refuses
-          # them on Apple Silicon. The swift.org Swift 6.2 toolchain
-          # ships universal runtime dylibs, so install it and let
-          # build.sh take the Swift runtime from there first.
-          curl -LO https://download.swift.org/swift-6.2-release/xcode/swift-6.2-RELEASE/swift-6.2-RELEASE-osx.pkg
-          sudo installer -pkg swift-6.2-RELEASE-osx.pkg -target /
-          lipo -archs /Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain/usr/lib/swift/macosx/libswiftCore.dylib
 
       - name: Build MacPlayer.app
         run: ./build.sh
