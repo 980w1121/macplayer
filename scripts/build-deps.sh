@@ -470,10 +470,16 @@ cd "$BUILD/src/ffmpeg-${FFMPEG_VERSION}"
 # libxcb also auto-disables libxcb_shm/shape/xfixes (configure
 # line 7242), but list them explicitly so a future FFmpeg keeps them
 # off even if that coupling changes.
+# --cc=cc (not clang): run #39 failed here because the Swift 5.10.1
+# toolchain install prepends its usr/bin to PATH, so plain `clang`
+# resolved to the 5.10.1 toolchain's clang, which cannot create an
+# executable (it cannot find the macOS SDK). `cc` is /usr/bin/cc,
+# which meson already proved resolves to Xcode's clang 21.0.0 in
+# this same run, so FFmpeg uses Xcode's clang too.
 ./configure \
     --prefix="$DEPS" \
     --arch=arm64 --target-os=darwin \
-    --cc=clang \
+    --cc=cc \
     --extra-cflags="-arch arm64 -mmacosx-version-min=13.0" \
     --extra-ldflags="-arch arm64 -mmacosx-version-min=13.0" \
     --enable-shared --disable-static --disable-programs \
