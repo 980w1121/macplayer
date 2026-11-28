@@ -5,12 +5,25 @@ import Foundation
 /// No document model, no SwiftUI scene, no network work at launch.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: PlayerWindowController?
+    // v1.0.10: AppKit can deliver the open-documents event before
+    // applicationDidFinishLaunching runs (double-clicking a video
+    // launches the app to open it), when windowController is still
+    // nil. Queue those URLs and open them once the window exists
+    // instead of silently dropping them.
+    private var pendingURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSLog("MacPlayer: applicationDidFinishLaunching")
         let controller = PlayerWindowController()
         self.windowController = controller
         controller.showWindow(nil)
+        NSLog("MacPlayer: window shown")
         buildMenu()
+        if !pendingURLs.isEmpty {
+            let urls = pendingURLs
+            pendingURLs.removeAll()
+            controller.open(urls: urls)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -28,11 +41,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Never re-add the plural openFiles: [String] form — the CI
     // guard in build.sh fails the build if it reappears.
     func application(_ sender: NSApplication, open urls: [URL]) {
-        windowController?.open(urls: urls)
+        guard let controller = windowController else {
+            pendingURLs.append(contentsOf: urls)
+            return
+        }
+        controller.open(urls: urls)
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        windowController?.open(urls: [URL(fileURLWithPath: filename)])
+        let url = URL(fileURLWithPath: filename)
+        guard let controller = windowController else {
+            pendingURLs.append(url)
+            return true
+        }
+        controller.open(urls: [url])
         return true
     }
 
