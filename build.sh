@@ -144,26 +144,49 @@ done
 # toolchain's usr/ dir, NOT the toolchain root — the previous fix
 # appended another /usr (.../usr/usr/lib/swift/macosx), a path that
 # does not exist, so the search never looked in the real dirs.
-# NOTE (run #17): Xcode 26.6 no longer ships libswiftCoreMIDI.dylib
-# anywhere in the toolchain, and the macOS 26 runner's /usr/lib/swift
-# lacks it too — the CoreMIDI Swift overlay was dropped. copy_swift_lib
-# below skips libraries that cannot be found instead of failing; the
-# v1.0.10 stub block after the rewrite loop then builds a tiny stub
-# dylib for each skipped library and points its reference at @rpath,
-# so no binary loads anything from /usr/lib/swift/ (v1.0.9 no-window
-# bug: loading any overlay from the system path pulls in the system
-# libswiftCore alongside the bundled Swift 6.2 runtime, which breaks
-# Swift bridging and kills the launch before any window appears).
+# NOTE (v1.0.11): the v1.0.10 stub approach is dead. It built an empty
+# stub dylib for every Swift overlay the toolchain did not ship, but
+# our code DOES use those overlays' symbols — v1.0.10 died at launch
+# on a missing DispatchWorkItemFlags symbol because the bundled
+# libswiftDispatch.dylib was a 16KB stub that exports nothing. The
+# swift.org 6.2 toolchain's macosx dir ships only libswiftCore and
+# libswift_Concurrency (run #35 log), and Xcode 26.6 only has the
+# overlays as thin x86_64 copies in swift-5.0/macosx, so
+# find_swift_lib now also searches the macOS SDK and the whole
+# toolchain trees for a real arm64 copy. A referenced Swift library
+# that cannot be found as a real arm64 dylib FAILS the build — a stub
+# would only crash on the user's Mac, so never ship one.
 TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/.." && pwd)"
 SWIFT_LIB_DIR="$TOOLCHAIN_DIR/lib/swift/macosx"
 SWIFT_LIB_DIR_BACKDEPLOY="$TOOLCHAIN_DIR/lib/swift-5.0/macosx"
 SWIFT_ORG_RUNTIME_DIR="${SWIFT_ORG_RUNTIME_DIR:-/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain/usr/lib/swift/macosx}"
+SWIFT_ORG_TOOLCHAIN_ROOT="${SWIFT_ORG_TOOLCHAIN_ROOT:-/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain}"
+SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+if [ -n "$SDK_PATH" ]; then
+    SDK_SWIFT_DIR="$SDK_PATH/usr/lib/swift"
+    SDK_SWIFT_DIR_MACOSX="$SDK_PATH/usr/lib/swift/macosx"
+else
+    SDK_SWIFT_DIR=""
+    SDK_SWIFT_DIR_MACOSX=""
+fi
+# Whole-tree index of every libswift*.dylib in the toolchains and the
+# SDK, built once (re-running find for each overlay would add minutes
+# to the build). find_swift_lib greps this instead of searching the
+# trees per library.
+SWIFT_FIND_TMP="/tmp/macplayer-swift-find.$$"
+{
+    [ -d "$SWIFT_ORG_TOOLCHAIN_ROOT" ] && find "$SWIFT_ORG_TOOLCHAIN_ROOT" -name 'libswift*.dylib' -print 2>/dev/null
+    [ -d "$TOOLCHAIN_DIR" ] && find "$TOOLCHAIN_DIR" -name 'libswift*.dylib' -print 2>/dev/null
+    [ -d "$SDK_SWIFT_DIR" ] && find "$SDK_SWIFT_DIR" -name 'libswift*.dylib' -print 2>/dev/null
+} | sort -u > "$SWIFT_FIND_TMP"
+echo "Swift runtime search: org=$SWIFT_ORG_RUNTIME_DIR sdk=$SDK_SWIFT_DIR toolchain=$TOOLCHAIN_DIR"
+echo "Swift runtime index: $(wc -l < "$SWIFT_FIND_TMP" | tr -d ' ') libswift dylibs found in toolchains/SDK"
 has_arm64() {
     lipo -archs "$1" 2>/dev/null | grep -qw arm64
 }
 find_swift_lib() {
     name="$1"
-    for dir in "$SWIFT_ORG_RUNTIME_DIR" "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
+    for dir in "$SWIFT_ORG_RUNTIME_DIR" "$SDK_SWIFT_DIR_MACOSX" "$SDK_SWIFT_DIR" "$SWIFT_LIB_DIR" "$SWIFT_LIB_DIR_BACKDEPLOY"; do
         if [ -f "$dir/$name" ]; then
             if has_arm64 "$dir/$name"; then
                 echo "$dir/$name"
@@ -173,6 +196,10 @@ find_swift_lib() {
             fi
         fi
     done
+    # Fall back to the whole-tree index (swift.org toolchain, Xcode
+    # toolchain, macOS SDK — any path, not just *macosx*). The real
+    # arm64 overlays may live outside the standard runtime dirs
+    # (run #35: they are in none of them).
     while IFS= read -r found; do
         [ -n "$found" ] || continue
         if has_arm64 "$found"; then
@@ -182,7 +209,7 @@ find_swift_lib() {
             echo "note: skipping $found (no arm64 slice)" >&2
         fi
     done <<EOF
-$(find "$TOOLCHAIN_DIR" -path '*macosx*' -name "$name" -print 2>/dev/null)
+$(grep "/$name\$" "$SWIFT_FIND_TMP" 2>/dev/null || true)
 EOF
     if [ -f "/usr/lib/swift/$name" ] && has_arm64 "/usr/lib/swift/$name"; then
         echo "/usr/lib/swift/$name"
@@ -194,16 +221,13 @@ copy_swift_lib() {
     name="$1"
     if [ ! -f "$APP/Contents/Frameworks/$name" ]; then
         src="$(find_swift_lib "$name")" || {
-            # Run #17: a referenced Swift runtime library that the
-            # toolchain no longer ships (libswiftCoreMIDI) cannot be
-            # bundled — skip it here; the v1.0.10 stub block below
-            # builds a stub for it and rewrites its reference to
-            # @rpath, so nothing is left pointing at /usr/lib/swift/.
-            if ! grep -qx "$name" "$SWIFT_SKIP_TMP" 2>/dev/null; then
-                echo "$name" >> "$SWIFT_SKIP_TMP"
-                echo "warning: Swift runtime $name not shipped in the Xcode toolchain or the system runtime; will be stubbed to @rpath" >&2
-            fi
-            return 0
+            # v1.0.11: a referenced Swift runtime library that cannot
+            # be found as a real arm64 dylib FAILS the build. The
+            # v1.0.10 stub (an empty dylib) is not an option — our
+            # code uses these overlays' symbols, and a stub crashes
+            # at launch on a missing symbol (DispatchWorkItemFlags).
+            echo "error: Swift runtime $name is referenced but no real arm64 copy was found in the swift.org toolchain, the macOS SDK, the Xcode toolchain, or the system runtime — refusing to stub it (v1.0.10 crash)" >&2
+            exit 1
         }
         echo "bundling Swift runtime $name from $src"
         cp -f "$src" "$APP/Contents/Frameworks/$name"
@@ -225,8 +249,6 @@ copy_swift_lib() {
 # Repeat to a fixpoint: a newly copied Swift dylib may itself link
 # another Swift dylib (e.g. libswiftFoundation links libswiftCore).
 SWIFT_DEPS_TMP="/tmp/macplayer-swift-deps.$$"
-SWIFT_SKIP_TMP="/tmp/macplayer-swift-skip.$$"
-: > "$SWIFT_SKIP_TMP"
 while :; do
     before="$(ls "$APP/Contents/Frameworks" | wc -l)"
     : > "$SWIFT_DEPS_TMP"
@@ -240,13 +262,13 @@ while :; do
     after="$(ls "$APP/Contents/Frameworks" | wc -l)"
     [ "$after" = "$before" ] && break
 done
-rm -f "$SWIFT_DEPS_TMP" "$SWIFT_SKIP_TMP"
+rm -f "$SWIFT_DEPS_TMP" "$SWIFT_FIND_TMP"
 # Rewrite every /usr/lib/swift/ reference in the executable and all
 # bundled dylibs (including the Swift dylibs themselves, which
 # reference each other by absolute path) to @rpath/<basename> — but
-# only for libraries actually bundled. References to libraries the
-# toolchain no longer ships (run #17: libswiftCoreMIDI) are handled
-# by the stub block below instead of being left on the system path.
+# only for libraries actually bundled. A reference that cannot be
+# bundled now fails the build in copy_swift_lib (v1.0.11), so nothing
+# is left pointing at the system path by the time this loop runs.
 for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$binary" ] || continue
     otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' | while read -r dep; do
@@ -257,45 +279,13 @@ for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib
     done
 done
 
-# Stub the Swift libraries the toolchain no longer ships (v1.0.10).
-# After the rewrite loop above, any /usr/lib/swift/ reference that
-# remains points at a library that is referenced but NOT bundled
-# (run #17: libswiftCoreMIDI, plus libswiftOSLog, libswiftSpatial,
-# libswiftUniformTypeIdentifiers). Leaving such a reference on the
-# system path loads the macOS 13 system Swift runtime alongside the
-# bundled Swift 6.2 runtime — the v1.0.9 no-window bug. Build a tiny
-# stub dylib for each one inside the app and point the reference at
-# @rpath instead. The app and libmpv never call these overlays'
-# symbols (no CoreMIDI, no Logger, no Spatial, no UTType Swift API
-# is used), so the stub is never looked up; and if one ever were,
-# dyld would report the missing symbol loudly instead of silently
-# loading a second Swift runtime. The stub is built for arm64 with
-# minos 13.0 so it passes the guards below, and is signed with the
-# rest of Frameworks in the re-sign step.
-STUB_SRC="$(mktemp -d)/swift-stub.c"
-printf 'int __macplayer_swift_stub;\n' > "$STUB_SRC"
-for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
-    [ -e "$binary" ] || continue
-    for dep in $(otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
-        base="$(basename "$dep")"
-        # NOTE (run #34): do NOT `continue` here when the stub already
-        # exists — the `if [ ! -f ... ]` below already skips rebuilding
-        # it, and a `continue` would also skip the install_name_tool
-        # -change for this binary, leaving it linked to /usr/lib/swift/
-        # (libmpv kept /usr/lib/swift/libswiftCoreFoundation.dylib and
-        # tripped the system-Swift guard below).
-        if [ ! -f "$APP/Contents/Frameworks/$base" ]; then
-            echo "stubbing unbundled Swift library $base"
-            cc -dynamiclib -arch arm64 -mmacosx-version-min=13.0 \
-                -install_name "@rpath/$base" \
-                -o "$APP/Contents/Frameworks/$base" "$STUB_SRC" \
-                || { echo "error: failed to build stub for $base" >&2; exit 1; }
-            chmod +w "$APP/Contents/Frameworks/$base"
-        fi
-        install_name_tool -change "$dep" "@rpath/$base" "$binary" 2>/dev/null || true
-    done
-done
-rm -rf "$(dirname "$STUB_SRC")"
+# NOTE (v1.0.11): the stub block that used to live here is deleted.
+# It built empty placeholder dylibs for Swift overlays the toolchain
+# did not ship, but v1.0.10 proved our code uses those overlays'
+# symbols — the app died at launch on a missing DispatchWorkItemFlags
+# symbol from a stubbed libswiftDispatch. A referenced Swift library
+# that cannot be found as a real arm64 dylib now fails the build in
+# copy_swift_lib instead of being stubbed.
 
 # Fix LC_RPATH (v1.0.5 crash): rewriting load commands to @rpath is not
 # enough. The Swift compiler embeds its own RPATHs at link time — the
@@ -378,8 +368,8 @@ codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; e
 # system Swift runtime at all (v1.0.9 no-window bug: loading any
 # library from /usr/lib/swift/ pulls in the system libswiftCore
 # alongside the bundled Swift 6.2 runtime, which breaks Swift
-# bridging and kills the launch before any window appears — the stub
-# block above must have redirected every such reference to @rpath).
+# bridging and kills the launch before any window appears — the
+# bundling above must have redirected every such reference to @rpath).
 # Fail loudly in CI instead of shipping an app that dies at launch.
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$f" ] || continue
@@ -388,7 +378,7 @@ for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
         exit 1
     fi
     for dep in $(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
-        echo "error: $f still links the system Swift runtime ($dep) — every /usr/lib/swift/ reference must be bundled or stubbed to @rpath" >&2
+        echo "error: $f still links the system Swift runtime ($dep) — every /usr/lib/swift/ reference must be bundled to @rpath" >&2
         exit 1
     done
 done
@@ -430,6 +420,19 @@ if ! [ -f "$APP/Contents/Frameworks/libswiftCore.dylib" ]; then
     echo "error: libswiftCore.dylib was not bundled" >&2
     exit 1
 fi
+# Guard: no bundled Swift overlay may be an empty stub (v1.0.10
+# crash: the bundled libswiftDispatch.dylib was a 16KB stub that
+# exported nothing, so the app died at launch on a missing
+# DispatchWorkItemFlags symbol). A real overlay exports many symbols;
+# a stub exports almost none — refuse any that looks empty.
+for f in "$APP"/Contents/Frameworks/libswift*.dylib; do
+    [ -e "$f" ] || continue
+    nsym="$(nm -g "$f" 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$nsym" -lt 10 ]; then
+        echo "error: $f exports only $nsym symbols — it looks like an empty stub, not a real Swift library" >&2
+        exit 1
+    fi
+done
 # Guard: every bundled binary must declare minimum macOS 13.0 (v1.0.7
 # crash: Homebrew's libplacebo bottle declared minos 26.0 and
 # referenced a libc++ symbol added in macOS 14, so the app died at
