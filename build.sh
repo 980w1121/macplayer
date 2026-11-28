@@ -111,6 +111,15 @@ otool -L "$APP/Contents/MacOS/MacPlayer" | awk '{print $1}' | grep '\.dylib$' | 
     install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/MacPlayer"
 done
 
+# Swift 5.10 mode (v1.0.11): when MACPLAYER_USE_SYSTEM_SWIFT=1, the
+# app and libmpv are compiled with the swift.org Swift 5.10.1
+# toolchain, whose emitted code only references symbols already in
+# the macOS 13 system Swift 5.9 runtime — so no Swift runtime
+# library is bundled and the system runtime is used as-is. Skip the
+# whole bundling section below in that mode.
+if [ "${MACPLAYER_USE_SYSTEM_SWIFT:-0}" = "1" ]; then
+    echo "Using the system Swift runtime (Swift 5.10.1 build) — not bundling any Swift libraries"
+else
 # Bundle the Swift runtime (v1.0.4 crash fix).
 # mpv 0.42's macOS backend is written in Swift (osdep/mac/*.swift,
 # video/out/mac/*.swift), so libmpv.2.dylib links against the Swift
@@ -278,6 +287,7 @@ for binary in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib
         fi
     done
 done
+fi
 
 # NOTE (v1.0.11): the stub block that used to live here is deleted.
 # It built empty placeholder dylibs for Swift overlays the toolchain
@@ -364,12 +374,15 @@ otool -l "$APP/Contents/MacOS/MacPlayer" | grep -A3 LC_BUILD_VERSION | grep -q "
 codesign --verify --deep "$APP" || { echo "error: codesign verify failed" >&2; exit 1; }
 # Guard: no bundled binary may link a macOS 26-only system library
 # (v1.0.3 crash: Homebrew's freetype linked /usr/lib/libhvf.dylib,
-# which does not exist on macOS 13), and none may reference the
-# system Swift runtime at all (v1.0.9 no-window bug: loading any
-# library from /usr/lib/swift/ pulls in the system libswiftCore
-# alongside the bundled Swift 6.2 runtime, which breaks Swift
-# bridging and kills the launch before any window appears — the
-# bundling above must have redirected every such reference to @rpath).
+# which does not exist on macOS 13). In bundling mode, none may
+# reference the system Swift runtime at all (v1.0.9 no-window bug:
+# loading any library from /usr/lib/swift/ pulls in the system
+# libswiftCore alongside the bundled Swift 6.2 runtime, which breaks
+# Swift bridging and kills the launch before any window appears —
+# the bundling above must have redirected every such reference to
+# @rpath). In system-Swift mode (Swift 5.10.1, v1.0.11) the
+# /usr/lib/swift references are expected — the system runtime is
+# used as-is — so that part of the guard is skipped.
 # Fail loudly in CI instead of shipping an app that dies at launch.
 for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
     [ -e "$f" ] || continue
@@ -377,10 +390,12 @@ for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
         echo "error: $f links /usr/lib/libhvf.dylib (macOS 26-only)" >&2
         exit 1
     fi
-    for dep in $(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
-        echo "error: $f still links the system Swift runtime ($dep) — every /usr/lib/swift/ reference must be bundled to @rpath" >&2
-        exit 1
-    done
+    if [ "${MACPLAYER_USE_SYSTEM_SWIFT:-0}" != "1" ]; then
+        for dep in $(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep '^/usr/lib/swift/.*\.dylib$' || true); do
+            echo "error: $f still links the system Swift runtime ($dep) — every /usr/lib/swift/ reference must be bundled to @rpath" >&2
+            exit 1
+        done
+    fi
 done
 # Guard: no bundled binary may carry an LC_RPATH pointing outside the
 # app (v1.0.5 crash: the Swift compiler embedded /usr/lib/swift and the
@@ -412,6 +427,10 @@ for f in "$APP"/Contents/Frameworks/*.dylib; do
         exit 1
     fi
 done
+# The two guards below only apply in bundling mode (Swift 6.2):
+# in system-Swift mode (Swift 5.10.1) no Swift library is bundled,
+# so there is nothing to check here.
+if [ "${MACPLAYER_USE_SYSTEM_SWIFT:-0}" != "1" ]; then
 # Guard: libswiftCore must actually be bundled (v1.0.4 crash: the
 # macOS 13 system Swift 5.9 runtime lacks a Swift 6.2 symbol libmpv
 # needs, so a missing bundle would silently fall back to it and die
@@ -433,6 +452,21 @@ for f in "$APP"/Contents/Frameworks/libswift*.dylib; do
         exit 1
     fi
 done
+fi
+# Guard (system-Swift mode only): the app and libmpv must not
+# reference the Swift 6.2-only StaticArrayStorage symbol (v1.0.4
+# crash). If they do, the build actually used Swift 6.2 instead of
+# 5.10.1 (e.g. meson found the wrong swiftc) — fail loudly in CI
+# instead of shipping an app that dies at launch on macOS 13.
+if [ "${MACPLAYER_USE_SYSTEM_SWIFT:-0}" = "1" ]; then
+    for f in "$APP/Contents/MacOS/MacPlayer" "$APP"/Contents/Frameworks/*.dylib; do
+        [ -e "$f" ] || continue
+        if nm -u "$f" 2>/dev/null | grep -q 'StaticArrayStorage'; then
+            echo "error: $f references the Swift 6.2-only StaticArrayStorage symbol — the build used Swift 6.2 instead of 5.10.1" >&2
+            exit 1
+        fi
+    done
+fi
 # Guard: every bundled binary must declare minimum macOS 13.0 (v1.0.7
 # crash: Homebrew's libplacebo bottle declared minos 26.0 and
 # referenced a libc++ symbol added in macOS 14, so the app died at
